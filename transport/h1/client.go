@@ -10,7 +10,9 @@ import (
 	"github.com/libsdf/df/conf"
 	"github.com/libsdf/df/http"
 	"github.com/libsdf/df/log"
+	"github.com/libsdf/df/transport/framer"
 	"github.com/libsdf/df/transport/framer/f1"
+	"github.com/libsdf/df/transport/framer/ws"
 	"github.com/libsdf/df/utils"
 	"io"
 	"net"
@@ -83,19 +85,26 @@ func (c *Client) worker() {
 		return
 	}
 
+	scheme := strings.ToLower(uri.Scheme)
+
 	useTLS := false
 	host := uri.Hostname()
 	port := uri.Port()
 
-	if strings.ToLower(uri.Scheme) == "https" {
+	useWS := false
+
+	if scheme == "https" || scheme == "wss" {
 		useTLS = true
+	}
+	if scheme == "ws" || scheme == "wss" {
+		useWS = true
 	}
 
 	if len(port) <= 0 {
-		switch strings.ToLower(uri.Scheme) {
-		case "http":
+		switch scheme {
+		case "http", "ws":
 			port = "80"
-		case "https":
+		case "https", "wss":
 			port = "443"
 		}
 	}
@@ -133,13 +142,25 @@ func (c *Client) worker() {
 	q.Set("c", c.id)
 	uri.RawQuery = q.Encode()
 	uri.Path = "/api/cv2"
+
 	h.URL = uri
-	h.Method = "POST"
 	h.Proto = "HTTP/1.1"
-	h.Values.Set("Content-Type", "image/png")
+	if useWS {
+		wsKeyb := make([]byte, 4)
+		rand.Read(wsKeyb)
+		wsKey := base64.StdEncoding.EncodeToString(wsKeyb)
+		h.Method = "GET"
+		h.Values.Set("Connection", "upgrade")
+		h.Values.Set("Upgrade", "websocket")
+		h.Values.Set("Sec-WebSocket-Key", wsKey)
+	} else {
+		h.Method = "POST"
+		h.Values.Set("Content-Type", "image/png")
+	}
 	h.Values.Set("Authentication", authStr)
 	headerBuf := bytes.NewBuffer([]byte{})
 	h.WriteTo(headerBuf)
+
 	// if _, err := h.WriteTo(tx); err != nil {
 	if _, err := conn.Write(headerBuf.Bytes()); err != nil {
 		log.Errorf("<cid:%s> h.WriteTo: %v", c.id, err)
@@ -186,7 +207,12 @@ func (c *Client) worker() {
 
 	framerCfg.Set(conf.FRAMER_TIMESTAMP, fmt.Sprintf("%d", ts))
 	framerCfg.Set(conf.FRAMER_ROLE, "client")
-	tx := f1.Framer(conn, framerCfg)
+	tx := (framer.Framer)(nil)
+	if useWS {
+		tx = ws.Framer(conn, framerCfg)
+	} else {
+		tx = f1.Framer(conn, framerCfg)
+	}
 
 	chErr := make(chan error)
 

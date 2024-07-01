@@ -3,6 +3,7 @@ package h1
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -10,10 +11,16 @@ import (
 	"github.com/libsdf/df/http"
 	"github.com/libsdf/df/log"
 	"github.com/libsdf/df/transport/framer/f1"
+	"github.com/libsdf/df/transport/framer/ws"
 	"github.com/libsdf/df/utils"
 	"io"
 	"net"
+	"strings"
 	"time"
+)
+
+const (
+	wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 )
 
 type ServerOptions struct {
@@ -79,17 +86,6 @@ func handleServerConn(options *ServerOptions, conn net.Conn) {
 		return
 	}
 
-	authStr := header.Values.Get("Authentication")
-	if len(authStr) > 128 || len(authStr) <= 0 {
-		abort(header, conn)
-		return
-	}
-	authBytesEnc, err := base64.StdEncoding.DecodeString(authStr)
-	if err != nil {
-		abort(header, conn)
-		return
-	}
-
 	psk := options.ProtocolParams.Get(conf.FRAMER_PSK)
 	pskb, err := base64.StdEncoding.DecodeString(psk)
 	if err != nil {
@@ -98,23 +94,44 @@ func handleServerConn(options *ServerOptions, conn net.Conn) {
 		return
 	}
 
-	authBytes, err := f1.Decrypt(pskb, authBytesEnc)
-	if err != nil {
-		log.Warnf("f1.Decrypt: %v", err)
-		abort(header, conn)
-		return
-	}
+	authRequired := true
+	authBytes := ([]byte)(nil)
+	ts := int64(0)
 
-	authBytesLen := 8 + f1.KeySize()
-	if len(authBytes) < authBytesLen {
-		abort(header, conn)
-		return
-	}
+	if authRequired {
+		authStr := header.Values.Get("Authentication")
+		if len(authStr) > 128 || len(authStr) <= 0 {
+			abort(header, conn)
+			return
+		}
+		authBytesEnc, err := base64.StdEncoding.DecodeString(authStr)
+		if err != nil {
+			abort(header, conn)
+			return
+		}
 
-	ts := int64(binary.BigEndian.Uint64(authBytes[:8]))
-	now := time.Now().Unix()
-	if ts-now > 120 || ts-now < -120 {
-		abort(header, conn)
+		authb, err := f1.Decrypt(pskb, authBytesEnc)
+		if err != nil {
+			log.Warnf("f1.Decrypt: %v", err)
+			abort(header, conn)
+			return
+		}
+
+		authBytesLen := 8 + f1.KeySize()
+		if len(authb) < authBytesLen {
+			abort(header, conn)
+			return
+		}
+
+		ts = int64(binary.BigEndian.Uint64(authb[:8]))
+		now := time.Now().Unix()
+		if ts-now > 120 || ts-now < -120 {
+			abort(header, conn)
+			return
+		}
+
+		authBytes = authb
+	} else {
 		return
 	}
 
@@ -127,16 +144,40 @@ func handleServerConn(options *ServerOptions, conn net.Conn) {
 	}
 	keyNewEncStr := base64.StdEncoding.EncodeToString(keyNewEnc)
 
-	// log.Debugf("<cid:%s> offering new psk: %s", clientId, keyNewStr)
+	// check if the request demands a websocket handshake.
+	isWs := false
+	wsAccept := ""
+	if strings.EqualFold(header.Values.Get("Upgrade"), "websocket") {
+		isWs = true
+		wsKey := header.Values.Get("Sec-WebSocket-Key")
+		if len(wsKey) > 0 {
+			wsAckStr := fmt.Sprintf("%s%s", wsKey, wsGUID)
+			wsAckb := sha1.Sum([]byte(wsAckStr))
+			wsAccept = base64.StdEncoding.EncodeToString(wsAckb[:])
+		}
+	}
 
 	// send a response
 	rs := bytes.NewBuffer([]byte{})
-	fmt.Fprintf(rs, "%s 200 OK\r\n", header.Proto)
-	fmt.Fprintf(rs, "Connection: close\r\n")
-	fmt.Fprintf(rs, "Content-Type: image/png,stream=1\r\n")
-	fmt.Fprintf(rs, "Content-Transfer-Encoding: custom\r\n")
+	if isWs {
+		wsProto := header.Values.Get("Sec-WebSocket-Protocol")
+		fmt.Fprintf(rs, "%s 101 Switching Protocols\r\n", header.Proto)
+		fmt.Fprintf(rs, "Connection: Upgrade\r\n")
+		fmt.Fprintf(rs, "Upgrade: websocket\r\n")
+		fmt.Fprintf(rs, "Sec-WebSocket-Accept: %s\r\n", wsAccept)
+		if len(wsProto) > 0 {
+			fmt.Fprintf(rs, "Sec-WebSocket-Protocol: %s\r\n", wsProto)
+		}
+		fmt.Fprintf(rs, "Sec-WebSocket-Version: 7\r\n")
+	} else {
+		fmt.Fprintf(rs, "%s 200 OK\r\n", header.Proto)
+		fmt.Fprintf(rs, "Connection: close\r\n")
+		fmt.Fprintf(rs, "Content-Type: image/png,stream=1\r\n")
+		fmt.Fprintf(rs, "Content-Transfer-Encoding: custom\r\n")
+	}
 	fmt.Fprintf(rs, "X-Token: %s\r\n", keyNewEncStr)
 	fmt.Fprintf(rs, "\r\n")
+
 	if _, err := conn.Write(rs.Bytes()); err != nil {
 		if !utils.IsIOError(err) {
 			log.Warnf("conn.Write(resposne): %v", err)
@@ -149,12 +190,19 @@ func handleServerConn(options *ServerOptions, conn net.Conn) {
 	params := options.ProtocolParams.Clone()
 	params.Set(conf.FRAMER_PSK, keyNewStr)
 
+	// log.Debugf("<cid:%s> offering new psk: %s", clientId, keyNewStr)
+
 	if options.Handler != nil {
 		params.Set(conf.FRAMER_TIMESTAMP, fmt.Sprintf("%d", ts))
 		params.Set(conf.FRAMER_ROLE, "server")
 
-		tx := f1.Framer(conn, params)
-		options.Handler(clientId, tx)
+		if isWs {
+			tx := ws.Framer(conn, params)
+			options.Handler(clientId, tx)
+		} else {
+			tx := f1.Framer(conn, params)
+			options.Handler(clientId, tx)
+		}
 
 		return
 	}
