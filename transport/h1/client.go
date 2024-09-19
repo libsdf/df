@@ -118,14 +118,14 @@ func (c *Client) worker() {
 		}
 	}
 	// log.Debugf("<client> connecting to %s...", addr)
-	conn, err := dial("tcp", addr)
+	conn, err := dial("tcp4", addr)
 	if err != nil {
 		log.Warnf("<cid:%s> net.Dial(%s): %v", c.id, addr, err)
 		return
 	}
 	defer conn.Close()
 
-	// log.Debugf("<cid:%s> connected to transport-server.", c.id)
+	// log.Debugf("<cid:%s> connected to transport-server %s.", c.id, addr)
 
 	// construct authentication request.
 	ts := time.Now().Unix()
