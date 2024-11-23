@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,8 +29,8 @@ type Client struct {
 	id        string
 	serverUrl string
 
-	workerAlive bool
-	connected   bool
+	workerAlive *atomic.Bool
+	connected   *atomic.Bool
 
 	chR     chan []byte
 	chW     chan []byte
@@ -66,11 +67,13 @@ func (c *Client) appendBuf(dat []byte) error {
 
 func (c *Client) worker() {
 	// log.Debugf("<cid:%s> worker start.", c.id)
-	defer func() {
-		c.connected = false
-		c.workerAlive = false
-		// log.Debugf("<cid:%s> worker exit.", c.id)
-	}()
+	// defer log.Debugf("<cid:%s> worker exit.", c.id)
+	defer c.connected.Store(false)
+
+	c.workerAlive.Store(true)
+	defer c.workerAlive.Store(false)
+
+	defer func() { c.chR <- nil }()
 
 	psk := c.cfg.Get(conf.FRAMER_PSK)
 	pskb, err := base64.StdEncoding.DecodeString(psk)
@@ -202,7 +205,7 @@ func (c *Client) worker() {
 		return
 	}
 
-	c.connected = true
+	c.connected.Store(true)
 	// log.Debugf("<cid:%s> transport established.", c.id)
 
 	framerCfg.Set(conf.FRAMER_TIMESTAMP, fmt.Sprintf("%d", ts))
@@ -275,10 +278,13 @@ func (c *Client) worker() {
 }
 
 func (c *Client) Read(buf []byte) (int, error) {
-	if !c.workerAlive {
+	if !c.workerAlive.Load() {
 		// log.Warnf("<cid:%s> Read(): worker dead.", c.id)
 		return 0, io.EOF
 	}
+
+	// log.Debugf("client.Read: enter.")
+	// defer log.Debugf("client.Read: exit.")
 
 	if c.lenBufRead > 0 {
 		size := len(buf)
@@ -292,6 +298,8 @@ func (c *Client) Read(buf []byte) (int, error) {
 	}
 
 	select {
+	case <-time.After(time.Second * 5):
+		return 0, nil
 	case chunk := <-c.chR:
 		if chunk == nil {
 			return 0, io.EOF
@@ -311,7 +319,7 @@ func (c *Client) Read(buf []byte) (int, error) {
 }
 
 func (c *Client) Write(buf []byte) (int, error) {
-	if !c.workerAlive {
+	if !c.workerAlive.Load() {
 		// log.Warnf("worker dead. returns EOF.")
 		return 0, io.EOF
 	}
@@ -320,8 +328,7 @@ func (c *Client) Write(buf []byte) (int, error) {
 }
 
 func (c *Client) Close() error {
-	if c.workerAlive {
-		c.workerAlive = false
+	if c.workerAlive.Load() {
 		c.chClose <- 1
 	}
 	return nil
@@ -337,13 +344,16 @@ func CreateClient(cfg conf.Values, clientId string) (*Client, error) {
 		return nil, fmt.Errorf("invalid server_url.")
 	}
 
+	workerAlive := new(atomic.Bool)
+	workerAlive.Store(true)
+
 	c := &Client{
 		cfg:       cfg,
 		id:        clientId,
 		serverUrl: serverUrl,
 
-		workerAlive: true,
-		connected:   false,
+		workerAlive: workerAlive, // true,
+		connected:   new(atomic.Bool),
 
 		chR:     make(chan []byte),
 		chW:     make(chan []byte),

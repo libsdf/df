@@ -1,4 +1,4 @@
-package h1
+package h1pool
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"github.com/libsdf/df/conf"
 	"github.com/libsdf/df/socks/tunnel"
 	"github.com/libsdf/df/transport"
+	"github.com/libsdf/df/transport/h1"
 )
 
 func init() {
@@ -16,7 +17,7 @@ type h1Suit struct {
 }
 
 func (s *h1Suit) Name() string {
-	return "h1"
+	return "h1pool"
 }
 
 func (s *h1Suit) Enabled() bool {
@@ -32,14 +33,14 @@ func (s *h1Suit) Server(cfg conf.Values) error {
 	if port <= 0 || port > 65535 {
 		return fmt.Errorf("invalid serving port.")
 	}
-	options := &ServerOptions{
+	options := &h1.ServerOptions{
 		Port:           port,
 		ProtocolParams: cfg,
-		Handler:        tunnel.NewServerHandler(),
+		Handler:        pooledServerHandler,
 	}
-	return Server(x, options)
+	return h1.Server(x, options)
 }
 
 func (s *h1Suit) Client(cfg conf.Values, clientId string) (transport.Transport, error) {
-	return CreateClient(cfg, clientId)
+	return getClient(cfg, clientId)
 }

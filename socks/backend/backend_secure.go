@@ -7,8 +7,6 @@ import (
 	"github.com/libsdf/df/message"
 	"github.com/libsdf/df/message/codec/s1"
 	"github.com/libsdf/df/transport"
-	_ "github.com/libsdf/df/transport/d1"
-	_ "github.com/libsdf/df/transport/h1"
 	"github.com/libsdf/df/utils"
 	"net"
 	"sync"
@@ -172,7 +170,7 @@ func (l *uplinkSecure) LookupIP(network, dn string) ([]net.IP, error) {
 }
 
 func (l *uplinkSecure) Dial(network, addr string) (Conn, error) {
-	connId := UniqueId(8)
+	connId := utils.UniqueId(8)
 
 	req := &message.MessageRequestDial{
 		ConnectionId: connId,
@@ -327,7 +325,7 @@ func (l *uplinkSecure) Close() {
 }
 
 func BackendSecure(suitName string, params conf.Values) Backend {
-	id := UniqueId(16)
+	id := utils.UniqueId(16)
 	// log.Infof("create secure tunnel: id=%s", id)
 
 	protoSuit := transport.GetSuit(suitName)

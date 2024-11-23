@@ -264,7 +264,7 @@ func (s *server) handleSession(clientId string, conn io.ReadWriteCloser) {
 	sess.handle()
 }
 
-func GetServerHandler() ServerHandler {
+func NewServerHandler() ServerHandler {
 	s := &server{}
 	return s.handleSession
 }

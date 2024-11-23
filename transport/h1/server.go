@@ -54,15 +54,16 @@ func Server(x context.Context, options *ServerOptions) error {
 	}
 }
 
-func abort(h *http.Header, conn net.Conn) {
+func abort(h *http.Header, conn net.Conn, reason string) {
 	rs := bytes.NewBuffer([]byte{})
-	body := []byte("denied")
+	body := []byte(reason)
 	fmt.Fprintf(rs, "%s 403 DENIED\r\n", h.Proto)
 	fmt.Fprintf(rs, "Connection: close\r\n")
 	fmt.Fprintf(rs, "Content-Type: text/plain\r\n")
 	fmt.Fprintf(rs, "Content-Length: %d\r\n", len(body))
 	fmt.Fprintf(rs, "\r\n")
 	rs.Write(body)
+	// log.Debugf("send abort to cient: %s", reason)
 	if _, err := conn.Write(rs.Bytes()); err != nil {
 		if !utils.IsIOError(err) {
 			log.Warnf("conn.Write(resposne-403): %v", err)
@@ -76,13 +77,16 @@ func handleServerConn(options *ServerOptions, conn net.Conn) {
 	hr := http.NewHeaderReader(conn)
 	header, err := hr.PeekHeader()
 	if err != nil {
+		log.Debugf("! %v", err)
 		return
 	}
 
 	clientId := header.URL.Query().Get("c")
-	// log.Infof("clientId: %s", clientId)
+	// log.Debugf("conn come-in: clientId=%s", clientId)
+	// defer log.Debugf("conn bye: clientId=%s", clientId)
+
 	if len(clientId) <= 0 {
-		abort(header, conn)
+		abort(header, conn, "denied")
 		return
 	}
 
@@ -90,7 +94,8 @@ func handleServerConn(options *ServerOptions, conn net.Conn) {
 	pskb, err := base64.StdEncoding.DecodeString(psk)
 	if err != nil {
 		log.Warnf("unable to base64 decode psk: %v", err)
-		abort(header, conn)
+		// abort(header, conn, fmt.Sprintf("b64: %v", err))
+		abort(header, conn, "denied")
 		return
 	}
 
@@ -101,32 +106,32 @@ func handleServerConn(options *ServerOptions, conn net.Conn) {
 	if authRequired {
 		authStr := header.Values.Get("Authentication")
 		if len(authStr) > 128 || len(authStr) <= 0 {
-			abort(header, conn)
+			abort(header, conn, "denied")
 			return
 		}
 		authBytesEnc, err := base64.StdEncoding.DecodeString(authStr)
 		if err != nil {
-			abort(header, conn)
+			abort(header, conn, "denied")
 			return
 		}
 
 		authb, err := f1.Decrypt(pskb, authBytesEnc)
 		if err != nil {
 			log.Warnf("f1.Decrypt: %v", err)
-			abort(header, conn)
+			abort(header, conn, "denied")
 			return
 		}
 
 		authBytesLen := 8 + f1.KeySize()
 		if len(authb) < authBytesLen {
-			abort(header, conn)
+			abort(header, conn, "denied")
 			return
 		}
 
 		ts = int64(binary.BigEndian.Uint64(authb[:8]))
 		now := time.Now().Unix()
 		if ts-now > 120 || ts-now < -120 {
-			abort(header, conn)
+			abort(header, conn, "denied")
 			return
 		}
 
@@ -139,7 +144,7 @@ func handleServerConn(options *ServerOptions, conn net.Conn) {
 	keyNewEnc, err := f1.Encrypt(pskb, keyNewRaw)
 	if err != nil {
 		log.Warnf("f1.Encrypt: %v", err)
-		abort(header, conn)
+		abort(header, conn, "denied")
 		return
 	}
 	keyNewEncStr := base64.StdEncoding.EncodeToString(keyNewEnc)
@@ -203,7 +208,5 @@ func handleServerConn(options *ServerOptions, conn net.Conn) {
 			tx := f1.Framer(conn, params)
 			options.Handler(clientId, tx)
 		}
-
-		return
 	}
 }

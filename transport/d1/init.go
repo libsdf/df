@@ -31,7 +31,7 @@ func (s *d1Suit) Server(cfg conf.Values) error {
 	options := &ServerOptions{
 		Port:           port,
 		ProtocolParams: cfg,
-		Handler:        tunnel.GetServerHandler(),
+		Handler:        tunnel.NewServerHandler(),
 	}
 	return Server(context.Background(), options)
 }

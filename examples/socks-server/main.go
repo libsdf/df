@@ -11,6 +11,9 @@ import (
 	"github.com/libsdf/df/log"
 	"github.com/libsdf/df/socks/backend"
 	"github.com/libsdf/df/socks/socks5"
+	_ "github.com/libsdf/df/transport/d1"
+	_ "github.com/libsdf/df/transport/h1"
+	_ "github.com/libsdf/df/transport/h1pool"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -101,7 +104,7 @@ func main() {
 	options := &socks5.Options{
 		Port: cfg.PortLocal,
 		BackendProvider: func() backend.Backend {
-			return backend.GetBackend("h1", params)
+			return backend.GetBackend("h1pool", params)
 		},
 	}
 	if err := socks5.Server(x, options); err != nil {

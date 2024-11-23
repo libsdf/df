@@ -16,3 +16,4 @@ examples/*/client.exe
 tests/test
 
 config.json
+config.pool.json

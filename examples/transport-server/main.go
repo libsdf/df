@@ -9,6 +9,7 @@ import (
 	"github.com/libsdf/df/transport"
 	_ "github.com/libsdf/df/transport/d1"
 	_ "github.com/libsdf/df/transport/h1"
+	_ "github.com/libsdf/df/transport/h1pool"
 )
 
 //go:embed VERSION
@@ -46,7 +47,7 @@ func main() {
 	params.Set("port", fmt.Sprintf("%d", cfg.port))
 	params.Set("framer_psk", cfg.psk)
 
-	if err := transport.GetSuit("h1").Server(params); err != nil {
+	if err := transport.GetSuit("h1pool").Server(params); err != nil {
 		log.Errorf("%v", err)
 		return
 	}
