@@ -12,6 +12,7 @@ import (
 	"github.com/libsdf/df/transport/framer"
 	"io"
 	"strconv"
+	"sync"
 )
 
 type F1 struct {
@@ -20,6 +21,9 @@ type F1 struct {
 
 	bufRead    []byte
 	lenBufRead int
+
+	lckRead  *sync.Mutex
+	lckWrite *sync.Mutex
 }
 
 func (f *F1) SetPSK(psk []byte) {
@@ -41,6 +45,9 @@ func (f *F1) appendBuf(dat []byte) {
 }
 
 func (f *F1) Read(buf []byte) (int, error) {
+	f.lckRead.Lock()
+	defer f.lckRead.Unlock()
+
 	// log.Debugf("Read(%d bytes buffer)", len(buf))
 	if f.lenBufRead > 0 {
 		size := len(buf)
@@ -86,6 +93,8 @@ func (f *F1) Read(buf []byte) (int, error) {
 }
 
 func (f *F1) Write(dat []byte) (int, error) {
+	f.lckWrite.Lock()
+	defer f.lckWrite.Unlock()
 
 	sizePad := 0
 	if len(dat) < 256 {
@@ -160,8 +169,10 @@ func Framer(tx io.ReadWriteCloser, cfg conf.Values) framer.Framer {
 	}
 
 	return &F1{
-		tx:      tx,
-		psk:     pskb,
-		bufRead: make([]byte, conf.DEFAULT_BUFFER_SIZE),
+		tx:       tx,
+		psk:      pskb,
+		bufRead:  make([]byte, conf.DEFAULT_BUFFER_SIZE),
+		lckRead:  new(sync.Mutex),
+		lckWrite: new(sync.Mutex),
 	}
 }

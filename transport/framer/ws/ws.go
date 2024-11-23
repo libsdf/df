@@ -14,6 +14,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 func Encrypt(key, dat []byte) ([]byte, error) {
@@ -33,6 +34,9 @@ type Ws struct {
 
 	bufRead    []byte
 	lenBufRead int
+
+	lckRead  *sync.Mutex
+	lckWrite *sync.Mutex
 }
 
 func (f *Ws) SetPSK(psk []byte) {
@@ -54,6 +58,9 @@ func (f *Ws) appendBuf(dat []byte) {
 }
 
 func (f *Ws) Read(buf []byte) (int, error) {
+	f.lckRead.Lock()
+	defer f.lckRead.Unlock()
+
 	// log.Debugf("Read(%d bytes buffer)", len(buf))
 	if f.lenBufRead > 0 {
 		size := len(buf)
@@ -135,6 +142,9 @@ func (f *Ws) Read(buf []byte) (int, error) {
 }
 
 func (f *Ws) Write(dat []byte) (int, error) {
+	f.lckWrite.Lock()
+	defer f.lckWrite.Unlock()
+
 	chunkEnc, err := Encrypt(f.psk, dat)
 	if err != nil {
 		return 0, err
@@ -229,9 +239,11 @@ func Framer(tx io.ReadWriter, cfg conf.Values) framer.Framer {
 	}
 
 	return &Ws{
-		tx:      tx,
-		psk:     pskb,
-		mask:    strings.EqualFold(role, "client"),
-		bufRead: make([]byte, conf.DEFAULT_BUFFER_SIZE),
+		tx:       tx,
+		psk:      pskb,
+		mask:     strings.EqualFold(role, "client"),
+		bufRead:  make([]byte, conf.DEFAULT_BUFFER_SIZE),
+		lckRead:  new(sync.Mutex),
+		lckWrite: new(sync.Mutex),
 	}
 }

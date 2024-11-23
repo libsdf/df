@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -38,6 +39,8 @@ type Client struct {
 
 	bufRead    []byte
 	lenBufRead int
+
+	lckRead *sync.Mutex
 }
 
 func (c *Client) appendBuf(dat []byte) error {
@@ -278,6 +281,9 @@ func (c *Client) worker() {
 }
 
 func (c *Client) Read(buf []byte) (int, error) {
+	c.lckRead.Lock()
+	defer c.lckRead.Unlock()
+
 	if !c.workerAlive.Load() {
 		// log.Warnf("<cid:%s> Read(): worker dead.", c.id)
 		return 0, io.EOF
@@ -361,6 +367,8 @@ func CreateClient(cfg conf.Values, clientId string) (*Client, error) {
 
 		bufRead:    make([]byte, conf.DEFAULT_BUFFER_SIZE),
 		lenBufRead: 0,
+
+		lckRead: new(sync.Mutex),
 	}
 	go c.worker()
 

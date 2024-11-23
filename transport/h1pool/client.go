@@ -70,10 +70,10 @@ func (c *client) start() {
 			return
 		} else {
 			c.lastActiveUnix.Store(time.Now().Unix())
-			// log.Debugf(
-			// 	"shared-client read packet[%s, %d bytes]",
-			// 	p.ClientId, len(p.Data),
-			// )
+			log.Debugf(
+				"shared-client read packet[%s, %d bytes]",
+				p.ClientId, len(p.Data),
+			)
 			if v, found := clients.Load(p.ClientId); found {
 				cl := v.(*dividedClient)
 				cl.writeBuf(p.Data)
@@ -83,9 +83,9 @@ func (c *client) start() {
 }
 
 func (c *client) writePacket(p *Packet) error {
-	// log.Debugf("shared-client write packet[%s, %d bytes]",
-	// 	p.ClientId, len(p.Data),
-	// )
+	log.Debugf("shared-client write packet[%s, %d bytes]",
+		p.ClientId, len(p.Data),
+	)
 	c.lck.Lock()
 	defer c.lck.Unlock()
 	if err := writePacket(c.tx, p); err != nil {
