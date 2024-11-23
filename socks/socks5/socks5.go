@@ -211,7 +211,7 @@ func (s *v5) HandleRequest(r *bufio.Reader, w net.Conn) error {
 	}
 
 	portb := make([]byte, 2)
-	if _, err := r.Read(portb); err != nil {
+	if _, err := io.ReadFull(r, portb); err != nil {
 		log.Errorf("%v", err)
 		return err
 	}
@@ -257,7 +257,7 @@ func (s *v5) HandleRequest(r *bufio.Reader, w net.Conn) error {
 	// log.Debugf("<%s> connecting to %s", sessionId, addrDst)
 	upConn, err := linker.Dial(netDst, addrDst)
 	if err != nil {
-		log.Errorf("net.Dial: %v", err)
+		log.Errorf("backend.Dial(%s, %s): %v", netDst, addrDst, err)
 		w.Write([]byte{ver, 4, 0, 0, 0, 0})
 		return err
 	}

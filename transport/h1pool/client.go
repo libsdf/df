@@ -55,7 +55,7 @@ func (c *client) start() {
 					return
 				}
 				now := time.Now().Unix()
-				if c.lastActiveUnix.Load()+300 < now {
+				if c.lastActiveUnix.Load()+60 < now {
 					return
 				}
 			case <-x.Done():

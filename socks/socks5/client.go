@@ -3,6 +3,7 @@ package socks5
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/libsdf/df/log"
 	"io"
 	"net"
 	"strconv"
@@ -23,17 +24,20 @@ func Socks5Connect(proxyAddr, addr string) (io.ReadWriteCloser, error) {
 	// connect to socks5 proxy server
 	conn, err := net.Dial("tcp", proxyAddr)
 	if err != nil {
+		log.Warnf("net.Dial(%s): %v", proxyAddr, err)
 		return nil, err
 	}
 
 	// initiate handshaking
 	hs := []byte{5, 0}
 	if _, err := conn.Write(hs); err != nil {
+		log.Warnf("conn.Write(hs): %v", err)
 		return nil, err
 	}
 
 	hsAck := make([]byte, 2)
 	if _, err := io.ReadFull(conn, hsAck); err != nil {
+		log.Warnf("io.ReadFull(hsAck): %v", err)
 		return nil, err
 	}
 
@@ -80,11 +84,13 @@ func Socks5Connect(proxyAddr, addr string) (io.ReadWriteCloser, error) {
 
 	// send socks5 request
 	if _, err := conn.Write(s5req); err != nil {
+		log.Warnf("conn.Write(s5req): %v", err)
 		return nil, err
 	}
 
 	s5reqAck := make([]byte, 10)
 	if _, err := io.ReadFull(conn, s5reqAck); err != nil {
+		log.Warnf("io.ReadFull(s5reqAck): %v", err)
 		return nil, err
 	}
 	if s5reqAck[0] != 5 {
