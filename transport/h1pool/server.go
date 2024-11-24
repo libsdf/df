@@ -212,9 +212,9 @@ func pooledServerHandler(trunkClientId string, tx io.ReadWriteCloser) {
 				return
 			} else {
 				chReply.lastActiveUnix.Store(time.Now().Unix())
-				log.Debugf("send packet[%s, %d bytes]",
-					p.ClientId, len(p.Data),
-				)
+				// log.Debugf("send packet[%s, %d bytes]",
+				// 	p.ClientId, len(p.Data),
+				// )
 			}
 		}
 	}
