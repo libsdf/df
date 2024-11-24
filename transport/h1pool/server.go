@@ -6,11 +6,13 @@ import (
 	// "github.com/libsdf/df/transport/h1"
 	"github.com/libsdf/df/log"
 	"github.com/libsdf/df/socks/tunnel"
+	"github.com/libsdf/df/utils"
 	"io"
 	"sync"
 	// "bufio"
 	"sync/atomic"
 	"time"
+	// "fmt"
 )
 
 /* type ServerHandler func(string, io.ReadWriteCloser) */
@@ -25,11 +27,7 @@ var (
 type instance struct {
 	clientId string
 
-	buf         []byte
-	bufLen      int
-	chBufUpdate chan int
-
-	lck *sync.RWMutex
+	buf *utils.ReadWriteBuffer
 
 	lastActiveUnix *atomic.Int64
 	exited         *atomic.Bool
@@ -38,10 +36,7 @@ type instance struct {
 func newInstance(clientId string) *instance {
 	return &instance{
 		clientId:       clientId,
-		buf:            make([]byte, BUF_SIZE),
-		bufLen:         0,
-		chBufUpdate:    make(chan int, 8),
-		lck:            new(sync.RWMutex),
+		buf:            utils.NewReadWriteBuffer(),
 		lastActiveUnix: new(atomic.Int64),
 		exited:         new(atomic.Bool),
 	}
@@ -59,71 +54,13 @@ func (t *instance) start() {
 }
 
 func (t *instance) writePacket(p *Packet) {
-	t.lck.Lock()
-	defer t.lck.Unlock()
-
-	size := len(p.Data)
-	sizeAfter := t.bufLen + size
-	if sizeAfter > cap(t.buf) {
-		// extend the buffer
-		capNew := cap(t.buf) + BUF_SIZE
-		for {
-			if capNew < sizeAfter {
-				capNew += BUF_SIZE
-			} else {
-				break
-			}
-		}
-		bufnew := make([]byte, capNew)
-		copy(bufnew[:t.bufLen], t.buf[:t.bufLen])
-		t.buf = bufnew
-	}
-	copy(t.buf[t.bufLen:sizeAfter], p.Data)
-	t.bufLen = sizeAfter
-
-	if len(t.chBufUpdate) == 0 {
-		t.chBufUpdate <- sizeAfter
-	}
-}
-
-func (t *instance) readFromBuf(buf []byte) int {
-	t.lck.Lock()
-	defer t.lck.Unlock()
-
-	size := len(buf)
-	if t.bufLen > 0 {
-		if size > t.bufLen {
-			size = t.bufLen
-		}
-		sizeRest := t.bufLen - size
-		copy(buf[:size], t.buf[:size])
-		copy(t.buf[0:sizeRest], t.buf[size:t.bufLen])
-		t.bufLen = sizeRest
-		return size
-	}
-
-	return 0
+	t.buf.Write(p.Data)
 }
 
 func (t *instance) Read(buf []byte) (int, error) {
 	t.lastActiveUnix.Store(time.Now().Unix())
 
-	if len(buf) == 0 {
-		return 0, nil
-	}
-
-	if size := t.readFromBuf(buf); size > 0 {
-		return size, nil
-	}
-
-	for {
-		select {
-		case <-t.chBufUpdate:
-			if size := t.readFromBuf(buf); size > 0 {
-				return size, nil
-			}
-		}
-	}
+	return t.buf.Read(buf)
 }
 
 func (t *instance) Write(dat []byte) (int, error) {

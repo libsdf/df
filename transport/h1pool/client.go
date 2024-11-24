@@ -106,24 +106,26 @@ var (
 )
 
 type dividedClient struct {
-	clientId    string
-	lck         *sync.RWMutex
-	buf         []byte
-	bufLen      int
-	chBufUpdate chan int
-	serial      *atomic.Uint32
+	clientId string
+	// lck         *sync.RWMutex
+	// buf         []byte
+	// bufLen      int
+	// chBufUpdate chan int
+	buf    *utils.ReadWriteBuffer
+	serial *atomic.Uint32
 }
 
 var _ transport.Transport = (*dividedClient)(nil)
 
 func newDividedClient(clientId string) *dividedClient {
 	return &dividedClient{
-		clientId:    clientId,
-		lck:         new(sync.RWMutex),
-		buf:         make([]byte, BUF_SIZE),
-		bufLen:      0,
-		chBufUpdate: make(chan int, 8),
-		serial:      new(atomic.Uint32),
+		clientId: clientId,
+		// lck:         new(sync.RWMutex),
+		// buf:         make([]byte, BUF_SIZE),
+		// bufLen:      0,
+		// chBufUpdate: make(chan int, 8),
+		buf:    utils.NewReadWriteBuffer(),
+		serial: new(atomic.Uint32),
 	}
 }
 
@@ -135,73 +137,80 @@ func (c *dividedClient) Close() error {
 
 // writeBuf used by sharedClient, feeding data it read.
 func (c *dividedClient) writeBuf(dat []byte) {
-	c.lck.Lock()
-	defer c.lck.Unlock()
+	// c.lck.Lock()
+	// defer c.lck.Unlock()
 
-	size := len(dat)
-	sizeAfter := c.bufLen + size
-	if sizeAfter > cap(c.buf) {
-		// extend the buffer
-		capNew := cap(c.buf) + BUF_SIZE
-		for {
-			if capNew < sizeAfter {
-				capNew += BUF_SIZE
-			} else {
-				break
-			}
-		}
-		bufnew := make([]byte, capNew)
-		copy(bufnew[:c.bufLen], c.buf[:c.bufLen])
-		c.buf = bufnew
-	}
-	copy(c.buf[c.bufLen:sizeAfter], dat)
-	c.bufLen = sizeAfter
+	// size := len(dat)
+	// sizeAfter := c.bufLen + size
+	// if sizeAfter > cap(c.buf) {
+	// 	// extend the buffer
+	// 	capNew := cap(c.buf) + BUF_SIZE
+	// 	for {
+	// 		if capNew < sizeAfter {
+	// 			capNew += BUF_SIZE
+	// 		} else {
+	// 			break
+	// 		}
+	// 	}
+	// 	bufnew := make([]byte, capNew)
+	// 	copy(bufnew[:c.bufLen], c.buf[:c.bufLen])
+	// 	c.buf = bufnew
+	// }
+	// copy(c.buf[c.bufLen:sizeAfter], dat)
+	// c.bufLen = sizeAfter
 
-	if len(c.chBufUpdate) == 0 {
-		c.chBufUpdate <- sizeAfter
-	}
+	// if len(c.chBufUpdate) == 0 {
+	// 	c.chBufUpdate <- sizeAfter
+	// }
+	c.buf.Write(dat)
 }
 
-func (c *dividedClient) readFromBuf(buf []byte) int {
-	c.lck.Lock()
-	defer c.lck.Unlock()
+// func (c *dividedClient) readFromBuf(buf []byte) int {
+// 	c.lck.Lock()
+// 	defer c.lck.Unlock()
 
-	size := len(buf)
-	if c.bufLen > 0 {
-		if size > c.bufLen {
-			size = c.bufLen
-		}
-		sizeRest := c.bufLen - size
-		copy(buf[:size], c.buf[:size])
-		copy(c.buf[0:sizeRest], c.buf[size:c.bufLen])
-		c.bufLen = sizeRest
-		return size
-	}
+// 	size := len(buf)
+// 	if c.bufLen > 0 {
+// 		if size > c.bufLen {
+// 			size = c.bufLen
+// 		}
+// 		sizeRest := c.bufLen - size
+// 		copy(buf[:size], c.buf[:size])
+// 		copy(c.buf[0:sizeRest], c.buf[size:c.bufLen])
+// 		c.bufLen = sizeRest
+// 		return size
+// 	}
 
-	return 0
-}
+// 	return 0
+// }
 
 func (c *dividedClient) Read(buf []byte) (int, error) {
-	if len(buf) == 0 {
-		return 0, nil
-	}
-
-	if size := c.readFromBuf(buf); size > 0 {
-		return size, nil
-	}
-
 	if sharedClient.exited.Load() {
 		return 0, fmt.Errorf("sharedClient exited.")
 	}
 
-	for {
-		select {
-		case <-c.chBufUpdate:
-			if size := c.readFromBuf(buf); size > 0 {
-				return size, nil
-			}
-		}
-	}
+	return c.buf.Read(buf)
+
+	// if len(buf) == 0 {
+	// 	return 0, nil
+	// }
+
+	// if size := c.readFromBuf(buf); size > 0 {
+	// 	return size, nil
+	// }
+
+	// if sharedClient.exited.Load() {
+	// 	return 0, fmt.Errorf("sharedClient exited.")
+	// }
+
+	// for {
+	// 	select {
+	// 	case <-c.chBufUpdate:
+	// 		if size := c.readFromBuf(buf); size > 0 {
+	// 			return size, nil
+	// 		}
+	// 	}
+	// }
 }
 
 func (c *dividedClient) Write(dat []byte) (int, error) {
