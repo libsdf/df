@@ -157,7 +157,9 @@ func (c *dividedClient) writeBuf(dat []byte) {
 	copy(c.buf[c.bufLen:sizeAfter], dat)
 	c.bufLen = sizeAfter
 
-	c.chBufUpdate <- sizeAfter
+	if len(c.chBufUpdate) == 0 {
+		c.chBufUpdate <- sizeAfter
+	}
 }
 
 func (c *dividedClient) readFromBuf(buf []byte) int {

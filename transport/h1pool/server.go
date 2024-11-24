@@ -81,7 +81,9 @@ func (t *instance) writePacket(p *Packet) {
 	copy(t.buf[t.bufLen:sizeAfter], p.Data)
 	t.bufLen = sizeAfter
 
-	t.chBufUpdate <- sizeAfter
+	if len(t.chBufUpdate) == 0 {
+		t.chBufUpdate <- sizeAfter
+	}
 }
 
 func (t *instance) readFromBuf(buf []byte) int {

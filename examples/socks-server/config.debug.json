@@ -1,0 +1,6 @@
+{
+    "psk": "PM2PujTDSLTPPZ6u4BYx5A==",
+    "server_url": "ws://localhost:8080/",
+    "port": 7070,
+    "http": {"port": 3127, "proxy_addr": "localhost:7070"}
+}
