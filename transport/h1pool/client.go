@@ -221,8 +221,10 @@ func getClient(cfg conf.Values, clientId string) (transport.Transport, error) {
 	sharedClients.Range(func(k, v interface{}) bool {
 		sc := v.(*client)
 		total += 1
-		if sc.createdAt > now-30 {
-			healthyCount += 1
+		if sc.createdAt > now-300 {
+			if sc.lastActiveUnix.Load() > now - 30 {
+				healthyCount += 1
+			}
 		}
 		return true
 	})
