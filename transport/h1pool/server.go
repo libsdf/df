@@ -20,9 +20,15 @@ import (
 const BUF_SIZE = 1024 * 4
 
 var (
-	instances = new(sync.Map)
-	chReply   = make(chan *Packet, 128)
+	instances  = new(sync.Map)
+	chansReply = new(sync.Map)
 )
+
+type replyChannel struct {
+	ch             chan *Packet
+	createdAt      int64
+	lastActiveUnix *atomic.Int64
+}
 
 type instance struct {
 	clientId string
@@ -65,16 +71,43 @@ func (t *instance) Read(buf []byte) (int, error) {
 
 func (t *instance) Write(dat []byte) (int, error) {
 	t.lastActiveUnix.Store(time.Now().Unix())
+
+	chReply := (*replyChannel)(nil)
+	// lastActiveUnix := int64(0)
+	latest := int64(0)
+	chansReply.Range(func(k, v interface{}) bool {
+		ch := v.(*replyChannel)
+		if latest == 0 || latest < ch.createdAt {
+			latest = ch.createdAt
+			chReply = ch
+		}
+		// activeUnix := ch.lastActiveUnix.Load()
+		// if lastActiveUnix <= activeUnix {
+		// 	lastActiveUnix = activeUnix
+		// 	chReply = ch
+		// }
+		return true
+	})
+
+	if chReply == nil {
+		// no reply channel
+		log.Warnf("no reply channel.")
+		return 0, io.EOF
+	}
+
 	p := &Packet{
 		ClientId: t.clientId,
 		Data:     dat,
 	}
-	chReply <- p
+
+	chReply.ch <- p
+	chReply.lastActiveUnix.Store(time.Now().Unix())
+
 	return len(dat), nil
 }
 
 func (t *instance) Close() error {
-	return nil
+	return t.buf.Close()
 }
 
 /*
@@ -118,7 +151,18 @@ func pooledServerHandler(trunkClientId string, tx io.ReadWriteCloser) {
 	log.Debugf("pooled server handler start.")
 	defer log.Debugf("pooled server handler exit.")
 
-	go instancesCleaner(x)
+	now := time.Now().Unix()
+	chReply := &replyChannel{
+		ch:             make(chan *Packet, 32),
+		createdAt:      now,
+		lastActiveUnix: new(atomic.Int64),
+	}
+	chReply.lastActiveUnix.Store(now)
+	chansReply.Store(trunkClientId, chReply)
+
+	defer chansReply.Delete(trunkClientId)
+
+	// go instancesCleaner(x)
 
 	// r := bufio.NewReader(tx)
 
@@ -162,14 +206,15 @@ func pooledServerHandler(trunkClientId string, tx io.ReadWriteCloser) {
 		select {
 		case <-x.Done():
 			return
-		case p := <-chReply:
+		case p := <-chReply.ch:
 			if err := writePacket(tx, p); err != nil {
 				log.Warnf("writePacket: %v", err)
 				return
 			} else {
-				// log.Debugf("send packet[%s, %d bytes]",
-				//     p.ClientId, len(p.Data),
-				// )
+				chReply.lastActiveUnix.Store(time.Now().Unix())
+				log.Debugf("send packet[%s, %d bytes]",
+					p.ClientId, len(p.Data),
+				)
 			}
 		}
 	}

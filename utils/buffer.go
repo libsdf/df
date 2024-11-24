@@ -1,8 +1,10 @@
 package utils
 
 import (
+	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 )
 
 const BUF_SIZE = 1024 * 4
@@ -13,9 +15,10 @@ type ReadWriteBuffer struct {
 	buf    []byte
 	bufLen int
 	cond   *sync.Cond
+	eof    *atomic.Bool
 }
 
-var _ io.ReadWriter = (*ReadWriteBuffer)(nil)
+var _ io.ReadWriteCloser = (*ReadWriteBuffer)(nil)
 
 func NewReadWriteBuffer() *ReadWriteBuffer {
 	return &ReadWriteBuffer{
@@ -25,7 +28,15 @@ func NewReadWriteBuffer() *ReadWriteBuffer {
 		cond: &sync.Cond{
 			L: new(sync.Mutex),
 		},
+		eof: new(atomic.Bool),
 	}
+}
+
+func (f *ReadWriteBuffer) Close() error {
+	if closed := f.eof.Swap(true); closed {
+		return fmt.Errorf("buffer was closed already.")
+	}
+	return nil
 }
 
 func (f *ReadWriteBuffer) readFromBuf(buf []byte) int {
@@ -56,6 +67,10 @@ func (f *ReadWriteBuffer) Read(buf []byte) (int, error) {
 		return size, nil
 	}
 
+	if f.eof.Load() {
+		return 0, io.EOF
+	}
+
 	for {
 		f.cond.L.Lock()
 		defer f.cond.L.Unlock()
@@ -67,6 +82,10 @@ func (f *ReadWriteBuffer) Read(buf []byte) (int, error) {
 }
 
 func (f *ReadWriteBuffer) Write(dat []byte) (int, error) {
+	if f.eof.Load() {
+		return 0, io.EOF
+	}
+
 	f.lck.Lock()
 	defer f.lck.Unlock()
 
