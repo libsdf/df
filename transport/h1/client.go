@@ -18,7 +18,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
-	"sync"
+	// "sync"
 	"sync/atomic"
 	"time"
 )
@@ -33,40 +33,45 @@ type Client struct {
 	workerAlive *atomic.Bool
 	connected   *atomic.Bool
 
-	chR     chan []byte
+	// chR     chan []byte
 	chW     chan []byte
 	chClose chan int
 
-	bufRead    []byte
-	lenBufRead int
+	bufRead *utils.ReadWriteBuffer
 
-	lckRead *sync.Mutex
+	// bufRead    []byte
+	// lenBufRead int
+	// lckRead *sync.Mutex
 }
 
-func (c *Client) appendBuf(dat []byte) error {
-	sizeAfter := c.lenBufRead + len(dat)
-	if sizeAfter > cap(c.bufRead) {
-
-		// extend the buffer
-		sizeNew := cap(c.bufRead)
-		for sizeNew < sizeAfter {
-			sizeNew *= 2
-		}
-		if sizeNew > conf.MAX_BUFFER_SIZE*2 {
-			return io.ErrShortBuffer
-		}
-		buf := make([]byte, sizeNew)
-
-		copy(buf, c.bufRead[:c.lenBufRead])
-		copy(buf[c.lenBufRead:], dat)
-		c.bufRead = buf
-		c.lenBufRead = sizeAfter
-	} else {
-		copy(c.bufRead[c.lenBufRead:], dat)
-		c.lenBufRead = sizeAfter
-	}
-	return nil
+func (c *Client) Connected() bool {
+	return c.connected.Load() && c.workerAlive.Load()
 }
+
+// func (c *Client) appendBuf(dat []byte) error {
+// 	sizeAfter := c.lenBufRead + len(dat)
+// 	if sizeAfter > cap(c.bufRead) {
+
+// 		// extend the buffer
+// 		sizeNew := cap(c.bufRead)
+// 		for sizeNew < sizeAfter {
+// 			sizeNew *= 2
+// 		}
+// 		if sizeNew > conf.MAX_BUFFER_SIZE*2 {
+// 			return io.ErrShortBuffer
+// 		}
+// 		buf := make([]byte, sizeNew)
+
+// 		copy(buf, c.bufRead[:c.lenBufRead])
+// 		copy(buf[c.lenBufRead:], dat)
+// 		c.bufRead = buf
+// 		c.lenBufRead = sizeAfter
+// 	} else {
+// 		copy(c.bufRead[c.lenBufRead:], dat)
+// 		c.lenBufRead = sizeAfter
+// 	}
+// 	return nil
+// }
 
 func (c *Client) worker() {
 	// log.Debugf("<cid:%s> worker start.", c.id)
@@ -76,7 +81,7 @@ func (c *Client) worker() {
 	c.workerAlive.Store(true)
 	defer c.workerAlive.Store(false)
 
-	defer func() { c.chR <- nil }()
+	// defer func() { c.chR <- nil }()
 
 	psk := c.cfg.Get(conf.FRAMER_PSK)
 	pskb, err := base64.StdEncoding.DecodeString(psk)
@@ -223,10 +228,9 @@ func (c *Client) worker() {
 	chErr := make(chan error)
 
 	go func() {
-		maxBufSize := conf.MAX_BUFFER_SIZE
-		bufSize := conf.DEFAULT_BUFFER_SIZE
-		buf := make([]byte, bufSize)
-		countFullRead := 0
+		// maxBufSize := conf.MAX_BUFFER_SIZE
+		buf := make([]byte, conf.DEFAULT_BUFFER_SIZE)
+		// countFullRead := 0
 		for {
 			if size, err := tx.Read(buf); err != nil {
 				if !utils.IsIOError(err) {
@@ -236,21 +240,26 @@ func (c *Client) worker() {
 				return
 			} else {
 				// log.Debugf("<cid:%s> read %d bytes.", c.id, size)
-				chunk := make([]byte, size)
-				copy(chunk, buf[:size])
-				c.chR <- chunk
+				// chunk := make([]byte, size)
+				// copy(chunk, buf[:size])
+				// c.chR <- chunk
 
-				// check if buf should be enlarged.
-				if size == bufSize {
-					countFullRead += 1
-					if countFullRead >= 10 && bufSize < maxBufSize {
-						bufSize *= 2
-						buf = make([]byte, bufSize)
-						// log.Debugf("buffer size set to %d", bufSize)
-					}
-				} else {
-					countFullRead = 0
+				if _, err := c.bufRead.Write(buf[:size]); err != nil {
+					chErr <- err
+					return
 				}
+
+				// // check if buf should be enlarged.
+				// if size == bufSize {
+				// 	countFullRead += 1
+				// 	if countFullRead >= 10 && bufSize < maxBufSize {
+				// 		bufSize *= 2
+				// 		buf = make([]byte, bufSize)
+				// 		// log.Debugf("buffer size set to %d", bufSize)
+				// 	}
+				// } else {
+				// 	countFullRead = 0
+				// }
 			}
 		}
 	}()
@@ -281,8 +290,8 @@ func (c *Client) worker() {
 }
 
 func (c *Client) Read(buf []byte) (int, error) {
-	c.lckRead.Lock()
-	defer c.lckRead.Unlock()
+	// c.lckRead.Lock()
+	// defer c.lckRead.Unlock()
 
 	if !c.workerAlive.Load() {
 		// log.Warnf("<cid:%s> Read(): worker dead.", c.id)
@@ -292,36 +301,38 @@ func (c *Client) Read(buf []byte) (int, error) {
 	// log.Debugf("client.Read: enter.")
 	// defer log.Debugf("client.Read: exit.")
 
-	if c.lenBufRead > 0 {
-		size := len(buf)
-		if size > c.lenBufRead {
-			size = c.lenBufRead
-		}
-		copy(buf[:size], c.bufRead[:size])
-		copy(c.bufRead, c.bufRead[size:])
-		c.lenBufRead -= size
-		return size, nil
-	}
+	return c.bufRead.Read(buf)
 
-	select {
-	case <-time.After(time.Second * 5):
-		return 0, nil
-	case chunk := <-c.chR:
-		if chunk == nil {
-			return 0, io.EOF
-		}
-		size := len(chunk)
-		if len(chunk) > len(buf) {
-			size = len(buf)
-			copy(buf, chunk[:size])
-			if err := c.appendBuf(chunk[size:]); err != nil {
-				return size, err
-			}
-			return size, nil
-		}
-		copy(buf[:size], chunk)
-		return size, nil
-	}
+	// if c.lenBufRead > 0 {
+	// 	size := len(buf)
+	// 	if size > c.lenBufRead {
+	// 		size = c.lenBufRead
+	// 	}
+	// 	copy(buf[:size], c.bufRead[:size])
+	// 	copy(c.bufRead, c.bufRead[size:])
+	// 	c.lenBufRead -= size
+	// 	return size, nil
+	// }
+
+	// select {
+	// case <-time.After(time.Second * 5):
+	// 	return 0, nil
+	// case chunk := <-c.chR:
+	// 	if chunk == nil {
+	// 		return 0, io.EOF
+	// 	}
+	// 	size := len(chunk)
+	// 	if len(chunk) > len(buf) {
+	// 		size = len(buf)
+	// 		copy(buf, chunk[:size])
+	// 		if err := c.appendBuf(chunk[size:]); err != nil {
+	// 			return size, err
+	// 		}
+	// 		return size, nil
+	// 	}
+	// 	copy(buf[:size], chunk)
+	// 	return size, nil
+	// }
 }
 
 func (c *Client) Write(buf []byte) (int, error) {
@@ -334,7 +345,7 @@ func (c *Client) Write(buf []byte) (int, error) {
 }
 
 func (c *Client) Close() error {
-	if c.workerAlive.Load() {
+	if closed := c.workerAlive.Swap(true); !closed {
 		c.chClose <- 1
 	}
 	return nil
@@ -361,14 +372,15 @@ func CreateClient(cfg conf.Values, clientId string) (*Client, error) {
 		workerAlive: workerAlive, // true,
 		connected:   new(atomic.Bool),
 
-		chR:     make(chan []byte),
+		// chR:     make(chan []byte),
 		chW:     make(chan []byte),
-		chClose: make(chan int),
+		chClose: make(chan int, 2),
 
-		bufRead:    make([]byte, conf.DEFAULT_BUFFER_SIZE),
-		lenBufRead: 0,
+		bufRead: utils.NewReadWriteBuffer(),
+		// bufRead:    make([]byte, conf.DEFAULT_BUFFER_SIZE),
+		// lenBufRead: 0,
 
-		lckRead: new(sync.Mutex),
+		// lckRead: new(sync.Mutex),
 	}
 	go c.worker()
 

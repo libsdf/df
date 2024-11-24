@@ -25,7 +25,7 @@ var (
 /* a shared client transport */
 type client struct {
 	id             string
-	tx             transport.Transport
+	tx             *h1.Client // transport.Transport
 	exited         *atomic.Bool
 	lastActiveUnix *atomic.Int64
 	createdAt      int64
@@ -34,7 +34,7 @@ type client struct {
 	bytesSent      *atomic.Uint64
 }
 
-func newClient(id string, tx transport.Transport) *client {
+func newClient(id string, tx *h1.Client) *client {
 	now := time.Now().Unix()
 	sc := &client{
 		id:             id,
@@ -153,14 +153,20 @@ func newDividedClient(clientId string) *dividedClient {
 func (c *dividedClient) client() *client {
 	// lastActiveUnix := int64(0)
 
+	scAny := (*client)(nil)
 	sc := (*client)(nil)
 	latest := int64(0)
 
 	sharedClients.Range(func(k, v interface{}) bool {
 		c := v.(*client)
+		scAny = c
 		if latest == 0 || latest < c.createdAt {
-			latest = c.createdAt
-			sc = c
+			if c.tx.Connected() {
+				latest = c.createdAt
+				sc = c
+			} else if sc == nil {
+				sc = c
+			}
 		}
 		// activeUnix := c.lastActiveUnix.Load()
 		// if lastActiveUnix <= activeUnix {
@@ -170,7 +176,11 @@ func (c *dividedClient) client() *client {
 		return true
 	})
 
-	return sc
+	if sc != nil {
+		return sc
+	}
+
+	return scAny
 }
 
 func (c *dividedClient) Close() error {
@@ -187,7 +197,7 @@ func (c *dividedClient) writeBuf(dat []byte) {
 
 func (c *dividedClient) Read(buf []byte) (int, error) {
 	if sc := c.client(); sc == nil {
-		return 0, fmt.Errorf("sharedClient exited.")
+		return 0, fmt.Errorf("no alive transport.")
 	}
 
 	return c.buf.Read(buf)
@@ -196,7 +206,7 @@ func (c *dividedClient) Read(buf []byte) (int, error) {
 func (c *dividedClient) Write(dat []byte) (int, error) {
 	sc := c.client()
 	if sc == nil {
-		return 0, fmt.Errorf("sharedClient exited.")
+		return 0, fmt.Errorf("no alive transport.")
 	}
 
 	size := len(dat)
@@ -222,7 +232,7 @@ func getClient(cfg conf.Values, clientId string) (transport.Transport, error) {
 		sc := v.(*client)
 		total += 1
 		if sc.createdAt > now-300 {
-			if sc.lastActiveUnix.Load() > now - 30 {
+			if sc.lastActiveUnix.Load() > now-30 {
 				healthyCount += 1
 			}
 		}
