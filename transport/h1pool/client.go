@@ -24,29 +24,30 @@ var (
 
 /* a shared client transport */
 type client struct {
-	id             string
-	tx             *h1.Client // transport.Transport
-	exited         *atomic.Bool
-	lastActiveUnix *atomic.Int64
-	createdAt      int64
-	lck            *sync.Mutex
-	bytesRecv      *atomic.Uint64
-	bytesSent      *atomic.Uint64
+	id           string
+	tx           *h1.Client // transport.Transport
+	exited       *atomic.Bool
+	lastPongUnix *atomic.Int64
+	lastPingUnix *atomic.Int64
+	createdAt    int64
+	lck          *sync.Mutex
+	bytesRecv    *atomic.Uint64
+	bytesSent    *atomic.Uint64
 }
 
 func newClient(id string, tx *h1.Client) *client {
 	now := time.Now().Unix()
 	sc := &client{
-		id:             id,
-		tx:             tx,
-		exited:         new(atomic.Bool),
-		lastActiveUnix: new(atomic.Int64), // lastActiveUnix,
-		createdAt:      now,
-		lck:            new(sync.Mutex),
-		bytesRecv:      new(atomic.Uint64),
-		bytesSent:      new(atomic.Uint64),
+		id:           id,
+		tx:           tx,
+		exited:       new(atomic.Bool),
+		lastPongUnix: new(atomic.Int64),
+		lastPingUnix: new(atomic.Int64),
+		createdAt:    now,
+		lck:          new(sync.Mutex),
+		bytesRecv:    new(atomic.Uint64),
+		bytesSent:    new(atomic.Uint64),
 	}
-	sc.lastActiveUnix.Store(now)
 	return sc
 }
 
@@ -77,36 +78,49 @@ func (c *client) start() {
 				}
 				return
 			} else {
-				c.lastActiveUnix.Store(time.Now().Unix())
+				// c.lastRecvUnix.Store(time.Now().Unix())
 				c.bytesRecv.Add(uint64(len(p.Data)))
-				// log.Debugf(
-				// 	"shared-client[%s] read packet[%s, %d bytes]",
-				// 	c.id, p.ClientId, len(p.Data),
-				// )
-				if v, found := clients.Load(p.ClientId); found {
-					cl := v.(*dividedClient)
-					cl.writeBuf(p.Data)
+				log.Debugf(
+					"shared-client[%s] read packet[%s, %d bytes]",
+					c.id, p.ClientId, len(p.Data),
+				)
+				switch p.Op {
+				case OP_DATA:
+					if v, found := clients.Load(p.ClientId); found {
+						cl := v.(*dividedClient)
+						cl.writeBuf(p.Data)
+					}
+				case OP_PING:
+					// unlikely.
+				case OP_PONG:
+					c.lastPongUnix.Store(time.Now().Unix())
 				}
 			}
 		}
 
 	}()
 
+	serial := uint64(0)
 	for {
 		select {
-		case <-time.After(time.Second * 15):
-			// ping
-			ping := &Packet{
-				Op: OP_PING,
-			}
-			if err := c.writePacket(ping); err != nil {
-				log.Debugf("writePacket(ping): %v", err)
+		case <-time.After(time.Second * 5):
+			if c.lastPongUnix.Load()+15 < c.lastPingUnix.Load() {
+				log.Debugf("shared-client[%s] pong stalled.", c.id)
 				return
 			}
-			now := time.Now().Unix()
-			if c.lastActiveUnix.Load()+60 < now {
-				return
+			if serial%3 == 0 {
+				// ping
+				ping := &Packet{
+					Op: OP_PING,
+				}
+				if err := c.writePacket(ping); err != nil {
+					log.Debugf("writePacket(ping): %v", err)
+					return
+				} else {
+					c.lastPingUnix.Store(time.Now().Unix())
+				}
 			}
+			serial += 1
 		case <-x.Done():
 			return
 		}
@@ -114,21 +128,22 @@ func (c *client) start() {
 }
 
 func (c *client) writePacket(p *Packet) error {
-	// log.Debugf("shared-client[%s] write packet[%s, %d bytes]",
-	// 	c.id, p.ClientId, len(p.Data),
-	// )
+	log.Debugf("shared-client[%s] write packet[%s, %d bytes]",
+		c.id, p.ClientId, len(p.Data),
+	)
 	c.lck.Lock()
 	defer c.lck.Unlock()
 	if err := writePacket(c.tx, p); err != nil {
 		return err
 	} else {
 		c.bytesSent.Add(uint64(len(p.Data)))
+		// c.lastSentUnix.Store(time.Now().Unix())
 	}
 	return nil
 }
 
 func (c *client) WritePacket(p *Packet) error {
-	c.lastActiveUnix.Store(time.Now().Unix())
+	// c.lastSentUnix.Store(time.Now().Unix())
 	return c.writePacket(p)
 }
 
@@ -151,8 +166,6 @@ func newDividedClient(clientId string) *dividedClient {
 }
 
 func (c *dividedClient) client() *client {
-	// lastActiveUnix := int64(0)
-
 	scAny := (*client)(nil)
 	sc := (*client)(nil)
 	latest := int64(0)
@@ -168,11 +181,6 @@ func (c *dividedClient) client() *client {
 				sc = c
 			}
 		}
-		// activeUnix := c.lastActiveUnix.Load()
-		// if lastActiveUnix <= activeUnix {
-		// 	lastActiveUnix = activeUnix
-		// 	sc = c
-		// }
 		return true
 	})
 
@@ -220,6 +228,8 @@ func (c *dividedClient) Write(dat []byte) (int, error) {
 
 //////////////////////
 
+var sharedClientIdPrefix = fmt.Sprintf("s-%s", utils.UniqueId(8))
+
 func getClient(cfg conf.Values, clientId string) (transport.Transport, error) {
 	lck.Lock()
 	defer lck.Unlock()
@@ -232,16 +242,23 @@ func getClient(cfg conf.Values, clientId string) (transport.Transport, error) {
 		sc := v.(*client)
 		total += 1
 		if sc.createdAt > now-300 {
-			if sc.lastActiveUnix.Load() > now-30 {
-				healthyCount += 1
-			}
+			healthyCount += 1
+			// gap := sc.lastSentUnix.Load() - sc.lastRecvUnix.Load()
+			// if gap < 15 {
+			// 	healthyCount += 1
+			// }
 		}
 		return true
 	})
 
 	if total < 5 && healthyCount == 0 {
 		// no active shared clients. create a new
-		trunkClientId := fmt.Sprintf("shared-%s", utils.UniqueId(8))
+		// trunkClientId := fmt.Sprintf("shared-%s", utils.UniqueId(8))
+		trunkClientId := fmt.Sprintf(
+			"%s:%s",
+			sharedClientIdPrefix,
+			utils.UniqueId(8),
+		)
 		if cl, err := h1.CreateClient(cfg, trunkClientId); err != nil {
 			return nil, err
 		} else {
@@ -251,16 +268,6 @@ func getClient(cfg conf.Values, clientId string) (transport.Transport, error) {
 			log.Debugf("shared-client[%s] added.", trunkClientId)
 		}
 	}
-
-	// if sharedClient == nil || sharedClient.exited.Load() {
-	// 	trunkClientId := fmt.Sprintf("shared-%s", utils.UniqueId(8))
-	// 	if cl, err := h1.CreateClient(cfg, trunkClientId); err != nil {
-	// 		return nil, err
-	// 	} else {
-	// 		sharedClient = newClient(cl)
-	// 		go sharedClient.start()
-	// 	}
-	// }
 
 	cl := newDividedClient(clientId)
 	clients.Store(clientId, cl)

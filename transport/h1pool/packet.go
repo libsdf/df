@@ -16,6 +16,7 @@ const MAX_META_SIZE = 1024
 const (
 	OP_DATA = 0
 	OP_PING = 8
+	OP_PONG = 9
 )
 
 /*
@@ -50,7 +51,7 @@ func readAnyPacket(r io.Reader) (*Packet, error) {
 	op := head[3]
 
 	switch op {
-	case OP_DATA, OP_PING:
+	case OP_DATA, OP_PING, OP_PONG:
 		break
 	default:
 		return nil, fmt.Errorf("Invalid op.")
@@ -100,8 +101,6 @@ func readPacket(r io.Reader) (*Packet, error) {
 	for {
 		if p, err := readAnyPacket(r); err != nil {
 			return nil, err
-		} else if p.Op == OP_PING {
-			continue
 		} else {
 			return p, nil
 		}

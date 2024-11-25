@@ -214,7 +214,7 @@ func (c *Client) worker() {
 	}
 
 	c.connected.Store(true)
-	// log.Debugf("<cid:%s> transport established.", c.id)
+	log.Debugf("<cid:%s> transport established.", c.id)
 
 	framerCfg.Set(conf.FRAMER_TIMESTAMP, fmt.Sprintf("%d", ts))
 	framerCfg.Set(conf.FRAMER_ROLE, "client")

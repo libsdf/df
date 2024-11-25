@@ -10,9 +10,9 @@ import (
 	"io"
 	"sync"
 	// "bufio"
+	"strings"
 	"sync/atomic"
 	"time"
-	// "fmt"
 )
 
 /* type ServerHandler func(string, io.ReadWriteCloser) */
@@ -25,13 +25,15 @@ var (
 )
 
 type replyChannel struct {
+	trunkPrefix    string
 	ch             chan *Packet
 	createdAt      int64
 	lastActiveUnix *atomic.Int64
 }
 
 type instance struct {
-	clientId string
+	trunkPrefix string
+	clientId    string
 
 	buf *utils.ReadWriteBuffer
 
@@ -39,8 +41,9 @@ type instance struct {
 	exited         *atomic.Bool
 }
 
-func newInstance(clientId string) *instance {
+func newInstance(trunkPrefix, clientId string) *instance {
 	return &instance{
+		trunkPrefix:    trunkPrefix,
 		clientId:       clientId,
 		buf:            utils.NewReadWriteBuffer(),
 		lastActiveUnix: new(atomic.Int64),
@@ -77,6 +80,9 @@ func (t *instance) Write(dat []byte) (int, error) {
 	latest := int64(0)
 	chansReply.Range(func(k, v interface{}) bool {
 		ch := v.(*replyChannel)
+		if ch.trunkPrefix != t.trunkPrefix {
+			return true
+		}
 		if latest == 0 || latest < ch.createdAt {
 			latest = ch.createdAt
 			chReply = ch
@@ -148,11 +154,19 @@ func pooledServerHandler(trunkClientId string, tx io.ReadWriteCloser) {
 
 	x, cancel := context.WithCancel(context.Background())
 
-	log.Debugf("pooled server handler start.")
-	defer log.Debugf("pooled server handler exit.")
+	trunkPrefix := ""
+	if p := strings.Index(trunkClientId, ":"); p <= 0 {
+		tx.Close()
+	} else {
+		trunkPrefix = trunkClientId[:p]
+	}
+
+	log.Infof("[%s] pooled server handler start.", trunkClientId)
+	defer log.Infof("[%s] pooled server handler exit.", trunkClientId)
 
 	now := time.Now().Unix()
 	chReply := &replyChannel{
+		trunkPrefix:    trunkPrefix,
 		ch:             make(chan *Packet, 32),
 		createdAt:      now,
 		lastActiveUnix: new(atomic.Int64),
@@ -162,17 +176,6 @@ func pooledServerHandler(trunkClientId string, tx io.ReadWriteCloser) {
 
 	defer chansReply.Delete(trunkClientId)
 
-	// go instancesCleaner(x)
-
-	// r := bufio.NewReader(tx)
-
-	// // check the packet header magic
-	// if d, err := r.Peek(3); err != nil {
-	//     h := tunnel.NewServerHandler()
-	//     h(trunkClientId,
-	//     return
-	// }
-
 	go func() {
 		defer cancel()
 		for {
@@ -181,19 +184,33 @@ func pooledServerHandler(trunkClientId string, tx io.ReadWriteCloser) {
 				log.Warnf("readPacket: %v", err)
 				return
 			}
+
+			if p.Op == OP_PING {
+				pong := &Packet{Op: OP_PONG}
+				if err := writePacket(tx, pong); err != nil {
+					return
+				}
+				continue
+			}
+
 			cid := p.ClientId
 			if len(cid) == 0 {
 				continue
 			}
 
-			// log.Debugf("recv packet[%s, %d bytes]", cid, len(p.Data))
+			log.Debugf(
+				"[%s] recv packet[%s, %d bytes]",
+				trunkPrefix,
+				cid,
+				len(p.Data),
+			)
 
 			if v, found := instances.Load(cid); found {
 				inst := v.(*instance)
 				inst.writePacket(p)
 			} else {
 				if p.Serial == 0 {
-					inst := newInstance(cid)
+					inst := newInstance(trunkPrefix, cid)
 					instances.Store(cid, inst)
 					go inst.start()
 					inst.writePacket(p)
@@ -212,9 +229,12 @@ func pooledServerHandler(trunkClientId string, tx io.ReadWriteCloser) {
 				return
 			} else {
 				chReply.lastActiveUnix.Store(time.Now().Unix())
-				// log.Debugf("send packet[%s, %d bytes]",
-				// 	p.ClientId, len(p.Data),
-				// )
+				log.Debugf(
+					"[%s] send packet[%s, %d bytes]",
+					trunkPrefix,
+					p.ClientId,
+					len(p.Data),
+				)
 			}
 		}
 	}
