@@ -22,6 +22,25 @@ var (
 	clients       = new(sync.Map)
 )
 
+func queryClientInfo(id string) (isOldest bool, total int) {
+	total = 0
+	oldest := int64(0)
+	oldestId := ""
+	sharedClients.Range(func(k, v interface{}) bool {
+		sc := v.(*client)
+		total += 1
+		if oldest == 0 || oldest > sc.createdAt {
+			oldest = sc.createdAt
+			oldestId = sc.id
+		}
+		return true
+	})
+	if oldestId == id {
+		isOldest = true
+	}
+	return isOldest, total
+}
+
 /* a shared client transport */
 type client struct {
 	id           string
@@ -29,6 +48,7 @@ type client struct {
 	exited       *atomic.Bool
 	lastPongUnix *atomic.Int64
 	lastPingUnix *atomic.Int64
+	lastDataUnix *atomic.Int64
 	createdAt    int64
 	lck          *sync.Mutex
 	bytesRecv    *atomic.Uint64
@@ -43,6 +63,7 @@ func newClient(id string, tx *h1.Client) *client {
 		exited:       new(atomic.Bool),
 		lastPongUnix: new(atomic.Int64),
 		lastPingUnix: new(atomic.Int64),
+		lastDataUnix: new(atomic.Int64),
 		createdAt:    now,
 		lck:          new(sync.Mutex),
 		bytesRecv:    new(atomic.Uint64),
@@ -71,10 +92,13 @@ func (c *client) start() {
 
 	go func() {
 		defer cancel()
+		defer log.Debugf("shared-client[%s] stopped reading.", c.id)
 		for {
 			if p, err := readPacket(c.tx); err != nil {
 				if err != io.EOF {
 					log.Warnf("readPacket: %v", err)
+				} else {
+					log.Debugf("readPacket: %v", err)
 				}
 				return
 			} else {
@@ -86,6 +110,7 @@ func (c *client) start() {
 				)
 				switch p.Op {
 				case OP_DATA:
+					c.lastDataUnix.Store(time.Now().Unix())
 					if v, found := clients.Load(p.ClientId); found {
 						cl := v.(*dividedClient)
 						cl.writeBuf(p.Data)
@@ -104,11 +129,19 @@ func (c *client) start() {
 	for {
 		select {
 		case <-time.After(time.Second * 5):
+			now := time.Now().Unix()
 			if c.lastPongUnix.Load()+15 < c.lastPingUnix.Load() {
-				log.Debugf("shared-client[%s] pong stalled.", c.id)
+				log.Warnf("shared-client[%s] pong stalled.", c.id)
 				return
 			}
 			if serial%3 == 0 {
+				// if self is the oldest and idle, quit self.
+				idle := c.lastDataUnix.Load()+30 < now
+				oldest, total := queryClientInfo(c.id)
+				if oldest && total > 1 && idle {
+					log.Infof("shared-client[%s] decommission.", c.id)
+					return
+				}
 				// ping
 				ping := &Packet{
 					Op: OP_PING,
@@ -136,14 +169,15 @@ func (c *client) writePacket(p *Packet) error {
 	if err := writePacket(c.tx, p); err != nil {
 		return err
 	} else {
-		c.bytesSent.Add(uint64(len(p.Data)))
-		// c.lastSentUnix.Store(time.Now().Unix())
+		if p.Op == OP_DATA {
+			c.bytesSent.Add(uint64(len(p.Data)))
+			c.lastDataUnix.Store(time.Now().Unix())
+		}
 	}
 	return nil
 }
 
 func (c *client) WritePacket(p *Packet) error {
-	// c.lastSentUnix.Store(time.Now().Unix())
 	return c.writePacket(p)
 }
 
@@ -241,12 +275,9 @@ func getClient(cfg conf.Values, clientId string) (transport.Transport, error) {
 	sharedClients.Range(func(k, v interface{}) bool {
 		sc := v.(*client)
 		total += 1
-		if sc.createdAt > now-300 {
+		// idle := sc.lastDataUnix.Load() + 30 < now
+		if sc.createdAt > now-180 {
 			healthyCount += 1
-			// gap := sc.lastSentUnix.Load() - sc.lastRecvUnix.Load()
-			// if gap < 15 {
-			// 	healthyCount += 1
-			// }
 		}
 		return true
 	})
