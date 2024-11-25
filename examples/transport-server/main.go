@@ -27,11 +27,19 @@ func main() {
 	}
 
 	displayVersion := false
+	debug := false
 	cfg := &Conf{}
 	flag.IntVar(&cfg.port, "p", 8080, "serving port.")
 	flag.StringVar(&cfg.psk, "k", "", "psk")
+	flag.BoolVar(&debug, "d", false, "logging in debug level.")
 	flag.BoolVar(&displayVersion, "V", false, "display version info.")
 	flag.Parse()
+
+	if debug {
+		log.SetLevel(log.DEBUG)
+	} else {
+		log.SetLevel(log.INFO)
+	}
 
 	if displayVersion {
 		println(fmt.Sprintf("client v%s", version))

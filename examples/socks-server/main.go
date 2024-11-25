@@ -44,14 +44,22 @@ func main() {
 	}
 
 	displayVersion := false
+	debug := false
 	cfg := &Conf{}
 	cfgPath := ""
 	flag.IntVar(&cfg.PortLocal, "p", 0, "local port.")
 	flag.StringVar(&cfg.ServerUrl, "s", "", "server url")
 	flag.StringVar(&cfg.Psk, "k", "", "psk")
 	flag.StringVar(&cfgPath, "c", "config.json", "path to config.json.")
+	flag.BoolVar(&debug, "d", false, "logging in debug level.")
 	flag.BoolVar(&displayVersion, "V", false, "display version info.")
 	flag.Parse()
+
+	if debug {
+		log.SetLevel(log.DEBUG)
+	} else {
+		log.SetLevel(log.INFO)
+	}
 
 	if displayVersion {
 		println(fmt.Sprintf("client v%s", version))
