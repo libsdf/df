@@ -81,14 +81,32 @@ func (c *client) start() {
 			c.bytesSent.Load(),
 			c.bytesRecv.Load(),
 		)
+		now := time.Now().Unix()
+		log.Infof("shared-clients:")
+		sharedClients.Range(func(k, v interface{}) bool {
+			id := k.(string)
+			sc := v.(*client)
+			log.Infof(" ~ [%s] %d", id, sc.createdAt-now)
+			return true
+		})
 	}()
 
 	defer sharedClients.Delete(c.id)
 	defer c.exited.Store(true)
 
-	defer c.tx.Close()
-
 	x, cancel := context.WithCancel(context.Background())
+
+	if tx, err := c.tx.Connect(x); err != nil {
+		log.Warnf("c.tx.Connect: %v", err)
+		return
+	} else {
+		defer c.tx.Close()
+		go c.tx.RelayTraffic(tx)
+	}
+	// chErr := make(chan error)
+	// go func(){
+	// 	chErr <- c.tx.Start(x)
+	// }()
 
 	go func() {
 		defer cancel()
@@ -290,7 +308,7 @@ func getClient(cfg conf.Values, clientId string) (transport.Transport, error) {
 			sharedClientIdPrefix,
 			utils.UniqueId(8),
 		)
-		if cl, err := h1.CreateClient(cfg, trunkClientId); err != nil {
+		if cl, err := h1.NewClient(cfg, trunkClientId); err != nil {
 			return nil, err
 		} else {
 			sc := newClient(trunkClientId, cl)

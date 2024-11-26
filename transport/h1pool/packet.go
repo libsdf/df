@@ -81,7 +81,9 @@ func readAnyPacket(r io.Reader) (*Packet, error) {
 			return nil, err
 		}
 		if err := json.Unmarshal(metab, p); err != nil {
-			return nil, err
+			return nil, fmt.Errorf(
+				"json.Unmarshal: %v, (metab=%v)", err, metab,
+			)
 		}
 	}
 

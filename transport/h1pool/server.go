@@ -187,9 +187,10 @@ func pooledServerHandler(trunkClientId string, tx io.ReadWriteCloser) {
 
 			if p.Op == OP_PING {
 				pong := &Packet{Op: OP_PONG}
-				if err := writePacket(tx, pong); err != nil {
-					return
-				}
+				chReply.ch <- pong
+				// if err := writePacket(tx, pong); err != nil {
+				// 	return
+				// }
 				continue
 			}
 
