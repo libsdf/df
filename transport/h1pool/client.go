@@ -155,8 +155,9 @@ func (c *client) start() {
 			if serial%3 == 0 {
 				// if self is the oldest and idle, quit self.
 				idle := c.lastDataUnix.Load()+30 < now
+				idleTooLong := c.lastDataUnix.Load()+120 < now
 				oldest, total := queryClientInfo(c.id)
-				if oldest && total > 1 && idle {
+				if oldest && ((total > 1 && idle) || idleTooLong) {
 					log.Infof("shared-client[%s] decommission.", c.id)
 					return
 				}
