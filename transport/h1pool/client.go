@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	lck = new(sync.RWMutex)
-	// sharedClient = (*client)(nil)
+	lck           = new(sync.RWMutex)
+	workerAlive   = new(atomic.Bool)
 	sharedClients = new(sync.Map)
 	clients       = new(sync.Map)
 )
@@ -103,6 +103,9 @@ func (c *client) start() {
 		defer c.tx.Close()
 		go c.tx.RelayTraffic(tx)
 	}
+
+	log.Infof("shared-client[%s] connected.", c.id)
+
 	// chErr := make(chan error)
 	// go func(){
 	// 	chErr <- c.tx.Start(x)
@@ -143,24 +146,33 @@ func (c *client) start() {
 
 	}()
 
-	serial := uint64(0)
+	serial := uint64(1)
 	for {
 		select {
-		case <-time.After(time.Second * 5):
+		case <-time.After(time.Second * 3):
 			now := time.Now().Unix()
-			if c.lastPongUnix.Load()+15 < c.lastPingUnix.Load() {
-				log.Warnf("shared-client[%s] pong stalled.", c.id)
+			lastPing := c.lastPingUnix.Load()
+			lastPong := c.lastPongUnix.Load()
+			if lastPing > c.createdAt && lastPong+15 < lastPing {
+				log.Warnf(
+					"shared-client[%s] pong stalled. %s-%s=%s",
+					c.id, lastPing, lastPong, lastPing-lastPong,
+				)
 				return
 			}
-			if serial%3 == 0 {
+			if c.createdAt+20 < now {
+				// if serial%2 == 0 {
 				// if self is the oldest and idle, quit self.
 				idle := c.lastDataUnix.Load()+30 < now
-				idleTooLong := c.lastDataUnix.Load()+120 < now
+				idleTooLong := c.lastDataUnix.Load()+60 < now
 				oldest, total := queryClientInfo(c.id)
 				if oldest && ((total > 1 && idle) || idleTooLong) {
 					log.Infof("shared-client[%s] decommission.", c.id)
 					return
 				}
+				// }
+			}
+			if serial%3 == 0 {
 				// ping
 				ping := &Packet{
 					Op: OP_PING,
@@ -283,7 +295,7 @@ func (c *dividedClient) Write(dat []byte) (int, error) {
 
 var sharedClientIdPrefix = fmt.Sprintf("s-%s", utils.UniqueId(8))
 
-func getClient(cfg conf.Values, clientId string) (transport.Transport, error) {
+func tryAddNewSharedClient(cfg conf.Values) error {
 	lck.Lock()
 	defer lck.Unlock()
 
@@ -295,7 +307,7 @@ func getClient(cfg conf.Values, clientId string) (transport.Transport, error) {
 		sc := v.(*client)
 		total += 1
 		// idle := sc.lastDataUnix.Load() + 30 < now
-		if sc.createdAt > now-180 {
+		if sc.createdAt > now-300 {
 			healthyCount += 1
 		}
 		return true
@@ -310,13 +322,63 @@ func getClient(cfg conf.Values, clientId string) (transport.Transport, error) {
 			utils.UniqueId(8),
 		)
 		if cl, err := h1.NewClient(cfg, trunkClientId); err != nil {
-			return nil, err
+			return err
 		} else {
 			sc := newClient(trunkClientId, cl)
 			sharedClients.Store(trunkClientId, sc)
 			go sc.start()
 			log.Debugf("shared-client[%s] added.", trunkClientId)
 		}
+	}
+
+	return nil
+}
+
+func clientsWorker(cfg conf.Values) {
+	if alive := workerAlive.Swap(true); alive {
+		return
+	}
+	defer workerAlive.Store(false)
+	for {
+		select {
+		case <-time.After(time.Second * 2):
+			hasClients := false
+			clients.Range(func(_k, _v interface{}) bool {
+				hasClients = true
+				return false
+			})
+			if hasClients {
+				hasTxs := false
+				sharedClients.Range(func(_k, _v interface{}) bool {
+					hasTxs = true
+					return false
+				})
+				if !hasTxs {
+					log.Infof("worker try to create a new transport...")
+					if err := tryAddNewSharedClient(cfg); err != nil {
+						log.Warnf(
+							"worker: tryAddNewSharedClient: %v",
+							err,
+						)
+					}
+				}
+			}
+		}
+	}
+}
+
+func tryStartWorker(cfg conf.Values) {
+	if workerAlive.Load() {
+		return
+	}
+	go clientsWorker(cfg)
+}
+
+func getClient(cfg conf.Values, clientId string) (transport.Transport, error) {
+	tryStartWorker(cfg)
+
+	if err := tryAddNewSharedClient(cfg); err != nil {
+		return nil, err
 	}
 
 	cl := newDividedClient(clientId)
