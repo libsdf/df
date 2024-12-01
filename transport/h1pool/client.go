@@ -155,7 +155,7 @@ func (c *client) start() {
 			lastPong := c.lastPongUnix.Load()
 			if lastPing > c.createdAt && lastPong+15 < lastPing {
 				log.Warnf(
-					"shared-client[%s] pong stalled. %s-%s=%s",
+					"shared-client[%s] pong stalled. %d-%d=%d",
 					c.id, lastPing, lastPong, lastPing-lastPong,
 				)
 				return
