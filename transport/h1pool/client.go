@@ -230,7 +230,7 @@ func newDividedClient(clientId string) *dividedClient {
 	}
 }
 
-func (c *dividedClient) client() *client {
+func (c *dividedClient) getAvailableSharedClient() *client {
 	scAny := (*client)(nil)
 	sc := (*client)(nil)
 	latest := int64(0)
@@ -254,6 +254,31 @@ func (c *dividedClient) client() *client {
 	}
 
 	return scAny
+}
+
+func (c *dividedClient) client() *client {
+	if sc := c.getAvailableSharedClient(); sc != nil {
+		return sc
+	}
+	dur := time.Duration(0)
+	timeout := false
+	for {
+		select {
+		case <-time.After(time.Second * 2):
+			if sc := c.getAvailableSharedClient(); sc != nil {
+				return sc
+			}
+			dur += time.Second * 2
+			if dur > time.Second*30 {
+				timeout = true
+				break
+			}
+		}
+		if timeout {
+			break
+		}
+	}
+	return nil
 }
 
 func (c *dividedClient) Close() error {
