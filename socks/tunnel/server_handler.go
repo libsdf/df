@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"context"
 	"fmt"
 	"github.com/libsdf/df/conf"
 	"github.com/libsdf/df/log"
@@ -12,7 +13,7 @@ import (
 	"sync"
 )
 
-type ServerHandler func(string, io.ReadWriteCloser)
+type ServerHandler func(context.Context, string, io.ReadWriteCloser)
 
 var (
 	clients = new(sync.Map)
@@ -41,7 +42,7 @@ func (s *clientSession) debug(line string, pars ...interface{}) {
 	// log.Debugf("<cid:%s> %s", s.id, fmt.Sprintf(line, pars...))
 }
 
-func (s *clientSession) handleDialConn(m1 *message.MessageRequestDial, r *s1.Reader, w *s1.Writer) error {
+func (s *clientSession) handleDialConn(x context.Context, m1 *message.MessageRequestDial, r *s1.Reader, w *s1.Writer) error {
 	connId := m1.ConnectionId
 
 	debug := func(line string, pars ...interface{}) {
@@ -166,6 +167,8 @@ func (s *clientSession) handleDialConn(m1 *message.MessageRequestDial, r *s1.Rea
 
 	for {
 		select {
+		case <-x.Done():
+			return nil
 		case connState := <-chConn:
 			// control instruction from client.
 			if connState.State == "close" {
@@ -218,7 +221,8 @@ func (s *clientSession) handleDNS(m1 *message.MessageRequestDNS, r *s1.Reader, w
 	return nil
 }
 
-func (s *clientSession) handle() {
+func (s *clientSession) handle(x context.Context) {
+	defer s.conn.Close()
 	r := s1.NewReader(s.conn)
 	w := s1.NewWriter(s.conn)
 	serial := 0
@@ -240,7 +244,7 @@ func (s *clientSession) handle() {
 				}
 			case message.KindRequestDial:
 				m1 := m.(*message.MessageRequestDial)
-				if err := s.handleDialConn(m1, r, w); err != nil {
+				if err := s.handleDialConn(x, m1, r, w); err != nil {
 					return
 				}
 				return
@@ -255,13 +259,13 @@ func (s *clientSession) handle() {
 type server struct {
 }
 
-func (s *server) handleSession(clientId string, conn io.ReadWriteCloser) {
+func (s *server) handleSession(x context.Context, clientId string, conn io.ReadWriteCloser) {
 	// log.Debugf("handleSession: clientId=%s", clientId)
 	sess := &clientSession{
 		id:   clientId,
 		conn: conn,
 	}
-	sess.handle()
+	sess.handle(x)
 }
 
 func NewServerHandler() ServerHandler {

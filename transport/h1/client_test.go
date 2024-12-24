@@ -24,7 +24,7 @@ func TestClientRW(t *testing.T) {
 	go Server(x, &ServerOptions{
 		Port:           port,
 		ProtocolParams: paramsServer,
-		Handler: func(clientId string, conn io.ReadWriteCloser) {
+		Handler: func(x context.Context, clientId string, conn io.ReadWriteCloser) {
 			buf := make([]byte, 1024)
 			for {
 				if size, err := conn.Read(buf); err != nil {

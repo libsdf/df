@@ -10,10 +10,11 @@ import (
 	"github.com/libsdf/df/conf"
 	"github.com/libsdf/df/http"
 	"github.com/libsdf/df/log"
+	"github.com/libsdf/df/socks/tunnel"
 	"github.com/libsdf/df/transport/framer/f1"
 	"github.com/libsdf/df/transport/framer/ws"
 	"github.com/libsdf/df/utils"
-	"io"
+	// "io"
 	"net"
 	"strings"
 	"time"
@@ -26,7 +27,8 @@ const (
 type ServerOptions struct {
 	Port           int
 	ProtocolParams conf.Values
-	Handler        func(string, io.ReadWriteCloser)
+	// Handler        func(string, io.ReadWriteCloser)
+	Handler tunnel.ServerHandler
 }
 
 func Server(x context.Context, options *ServerOptions) error {
@@ -196,6 +198,8 @@ func handleServerConn(options *ServerOptions, conn net.Conn) {
 	params.Set(conf.FRAMER_PSK, keyNewStr)
 
 	// log.Debugf("<cid:%s> offering new psk: %s", clientId, keyNewStr)
+	x, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	if options.Handler != nil {
 		params.Set(conf.FRAMER_TIMESTAMP, fmt.Sprintf("%d", ts))
@@ -203,10 +207,10 @@ func handleServerConn(options *ServerOptions, conn net.Conn) {
 
 		if isWs {
 			tx := ws.Framer(conn, params)
-			options.Handler(clientId, tx)
+			options.Handler(x, clientId, tx)
 		} else {
 			tx := f1.Framer(conn, params)
-			options.Handler(clientId, tx)
+			options.Handler(x, clientId, tx)
 		}
 	}
 }

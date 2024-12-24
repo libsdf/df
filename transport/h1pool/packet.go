@@ -17,6 +17,7 @@ const (
 	OP_DATA = 0
 	OP_PING = 8
 	OP_PONG = 9
+	OP_EOS  = 10
 )
 
 /*
@@ -51,7 +52,7 @@ func readAnyPacket(r io.Reader) (*Packet, error) {
 	op := head[3]
 
 	switch op {
-	case OP_DATA, OP_PING, OP_PONG:
+	case OP_DATA, OP_PING, OP_PONG, OP_EOS:
 		break
 	default:
 		return nil, fmt.Errorf("Invalid op.")

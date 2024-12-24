@@ -28,9 +28,11 @@ func main() {
 
 	displayVersion := false
 	debug := false
+	useTLS := true
 	cfg := &Conf{}
 	flag.IntVar(&cfg.port, "p", 8080, "serving port.")
 	flag.StringVar(&cfg.psk, "k", "", "psk")
+	flag.BoolVar(&useTLS, "s", true, "serving in TLS mode.")
 	flag.BoolVar(&debug, "d", false, "logging in debug level.")
 	flag.BoolVar(&displayVersion, "V", false, "display version info.")
 	flag.Parse()
@@ -54,6 +56,11 @@ func main() {
 	params := make(conf.Values)
 	params.Set("port", fmt.Sprintf("%d", cfg.port))
 	params.Set("framer_psk", cfg.psk)
+	if useTLS {
+		params.Set("tls", "yes")
+	} else {
+		params.Set("tls", "")
+	}
 
 	if err := transport.GetSuit("h1pool").Server(params); err != nil {
 		log.Errorf("%v", err)

@@ -140,6 +140,11 @@ func (c *client) start() {
 					// unlikely.
 				case OP_PONG:
 					c.lastPongUnix.Store(time.Now().Unix())
+				case OP_EOS:
+					if v, found := clients.Load(p.ClientId); found {
+						cl := v.(*dividedClient)
+						cl.Close()
+					}
 				}
 			}
 		}
@@ -149,7 +154,7 @@ func (c *client) start() {
 	serial := uint64(1)
 	for {
 		select {
-		case <-time.After(time.Second * 3):
+		case <-time.After(time.Second * 5):
 			now := time.Now().Unix()
 			lastPing := c.lastPingUnix.Load()
 			lastPong := c.lastPongUnix.Load()
@@ -160,9 +165,7 @@ func (c *client) start() {
 				)
 				return
 			}
-			if c.createdAt+20 < now {
-				// if serial%2 == 0 {
-				// if self is the oldest and idle, quit self.
+			if c.createdAt+120 < now {
 				idle := c.lastDataUnix.Load()+30 < now
 				idleTooLong := c.lastDataUnix.Load()+60 < now
 				oldest, total := queryClientInfo(c.id)
@@ -170,9 +173,8 @@ func (c *client) start() {
 					log.Infof("shared-client[%s] decommission.", c.id)
 					return
 				}
-				// }
 			}
-			if serial%3 == 0 {
+			if serial%2 == 0 {
 				// ping
 				ping := &Packet{
 					Op: OP_PING,
@@ -285,6 +287,14 @@ func (c *dividedClient) Close() error {
 	// log.Debugf("divClient[%s] closed and removed.", c.clientId)
 	c.buf.Close()
 	clients.Delete(c.clientId)
+
+	sc := c.client()
+	serial := c.serial.Add(1) - 1
+	p := &Packet{ClientId: c.clientId, Serial: serial, Op: OP_EOS}
+	if err := sc.WritePacket(p); err != nil {
+		// ignore?
+	}
+
 	return nil
 }
 

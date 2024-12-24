@@ -39,15 +39,18 @@ type instance struct {
 
 	lastActiveUnix *atomic.Int64
 	exited         *atomic.Bool
+
+	chCloseByClient chan int
 }
 
 func newInstance(trunkPrefix, clientId string) *instance {
 	return &instance{
-		trunkPrefix:    trunkPrefix,
-		clientId:       clientId,
-		buf:            utils.NewReadWriteBuffer(),
-		lastActiveUnix: new(atomic.Int64),
-		exited:         new(atomic.Bool),
+		trunkPrefix:     trunkPrefix,
+		clientId:        clientId,
+		buf:             utils.NewReadWriteBuffer(),
+		lastActiveUnix:  new(atomic.Int64),
+		exited:          new(atomic.Bool),
+		chCloseByClient: make(chan int),
 	}
 }
 
@@ -58,8 +61,49 @@ func (t *instance) start() {
 	defer instances.Delete(t.clientId)
 	defer t.exited.Store(true)
 
+	x, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	chCloseByServer := make(chan int)
+
 	handler := tunnel.NewServerHandler()
-	handler(t.clientId, t /* self as tx */)
+	go func() {
+		handler(x, t.clientId, t /* self as tx */)
+		chCloseByServer <- 1
+	}()
+
+	select {
+	case <-t.chCloseByClient:
+		//
+	case <-chCloseByServer:
+		// send OP_EOS
+		chReply := t.getReplyChannel()
+		if chReply != nil {
+			p := &Packet{
+				ClientId: t.clientId,
+				Op:       OP_EOS,
+			}
+			chReply.ch <- p
+			chReply.lastActiveUnix.Store(time.Now().Unix())
+		}
+	}
+}
+
+func (t *instance) getReplyChannel() *replyChannel {
+	chReply := (*replyChannel)(nil)
+	latest := int64(0)
+	chansReply.Range(func(k, v interface{}) bool {
+		ch := v.(*replyChannel)
+		if ch.trunkPrefix != t.trunkPrefix {
+			return true
+		}
+		if latest == 0 || latest < ch.createdAt {
+			latest = ch.createdAt
+			chReply = ch
+		}
+		return true
+	})
+	return chReply
 }
 
 func (t *instance) writePacket(p *Packet) {
@@ -75,26 +119,7 @@ func (t *instance) Read(buf []byte) (int, error) {
 func (t *instance) Write(dat []byte) (int, error) {
 	t.lastActiveUnix.Store(time.Now().Unix())
 
-	chReply := (*replyChannel)(nil)
-	// lastActiveUnix := int64(0)
-	latest := int64(0)
-	chansReply.Range(func(k, v interface{}) bool {
-		ch := v.(*replyChannel)
-		if ch.trunkPrefix != t.trunkPrefix {
-			return true
-		}
-		if latest == 0 || latest < ch.createdAt {
-			latest = ch.createdAt
-			chReply = ch
-		}
-		// activeUnix := ch.lastActiveUnix.Load()
-		// if lastActiveUnix <= activeUnix {
-		// 	lastActiveUnix = activeUnix
-		// 	chReply = ch
-		// }
-		return true
-	})
-
+	chReply := t.getReplyChannel()
 	if chReply == nil {
 		// no reply channel
 		log.Warnf("no reply channel.")
@@ -113,6 +138,10 @@ func (t *instance) Write(dat []byte) (int, error) {
 }
 
 func (t *instance) Close() error {
+	select {
+	case t.chCloseByClient <- 1:
+	default:
+	}
 	return t.buf.Close()
 }
 
@@ -145,7 +174,7 @@ func instancesCleaner(x context.Context) {
 	}
 }
 
-func pooledServerHandler(trunkClientId string, tx io.ReadWriteCloser) {
+func pooledServerHandler(x context.Context, trunkClientId string, tx io.ReadWriteCloser) {
 	// assert(_uselessClientId, "shared")
 
 	// TODO:
@@ -196,6 +225,15 @@ func pooledServerHandler(trunkClientId string, tx io.ReadWriteCloser) {
 
 			cid := p.ClientId
 			if len(cid) == 0 {
+				continue
+			}
+
+			if p.Op == OP_EOS {
+				// close the instance
+				if v, found := instances.Load(cid); found {
+					inst := v.(*instance)
+					inst.Close()
+				}
 				continue
 			}
 
