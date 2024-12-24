@@ -141,6 +141,7 @@ func (c *client) start() {
 				case OP_PONG:
 					c.lastPongUnix.Store(time.Now().Unix())
 				case OP_EOS:
+					log.Infof("EOS received for %s.", p.ClientId)
 					if v, found := clients.Load(p.ClientId); found {
 						cl := v.(*dividedClient)
 						cl.Close()
