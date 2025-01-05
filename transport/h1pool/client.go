@@ -290,10 +290,12 @@ func (c *dividedClient) Close() error {
 	clients.Delete(c.clientId)
 
 	sc := c.client()
-	serial := c.serial.Add(1) - 1
-	p := &Packet{ClientId: c.clientId, Serial: serial, Op: OP_EOS}
-	if err := sc.WritePacket(p); err != nil {
-		// ignore?
+	if sc != nil {
+		serial := c.serial.Add(1) - 1
+		p := &Packet{ClientId: c.clientId, Serial: serial, Op: OP_EOS}
+		if err := sc.WritePacket(p); err != nil {
+			// ignore?
+		}
 	}
 
 	return nil

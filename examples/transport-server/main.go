@@ -10,6 +10,8 @@ import (
 	_ "github.com/libsdf/df/transport/d1"
 	_ "github.com/libsdf/df/transport/h1"
 	_ "github.com/libsdf/df/transport/h1pool"
+	"os"
+	"strconv"
 )
 
 //go:embed VERSION
@@ -48,10 +50,18 @@ func main() {
 		return
 	}
 
+	if v, err := strconv.Atoi(os.Getenv("PORT")); err == nil {
+		if v > 0 {
+			cfg.port = v
+		}
+	}
+
 	if cfg.port <= 0 {
 		println("use -p to specify the serving port.")
 		return
 	}
+
+	log.Infof("port: %d", cfg.port)
 
 	params := make(conf.Values)
 	params.Set("port", fmt.Sprintf("%d", cfg.port))
