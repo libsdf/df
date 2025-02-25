@@ -55,7 +55,7 @@ func handleConn(cfg *Conf, conn net.Conn) {
 	addr := fmt.Sprintf("%s:%s", host, port)
 	s5conn, err := socks5.Socks5Connect(cfg.ProxyAddr, addr)
 	if err != nil {
-		log.Warnf("Socks5Connect: %v", err)
+		log.Warnf("Socks5Connect(%s, %s): %v", cfg.ProxyAddr, addr, err)
 		return
 	}
 	defer s5conn.Close()
