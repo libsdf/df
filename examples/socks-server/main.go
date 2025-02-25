@@ -89,37 +89,50 @@ func main() {
 		}
 	}
 
-	if cfg.PortLocal <= 0 {
-		println("use -p to specify the local serving port.")
-		return
-	}
+	// if cfg.PortLocal <= 0 {
+	// 	println("use -p to specify the local serving port.")
+	// 	return
+	// }
 
-	if !isValidUrl(cfg.ServerUrl) {
-		println("invalid server URL.")
-		return
-	}
+	// if !isValidUrl(cfg.ServerUrl) {
+	// 	println("invalid server URL.")
+	// 	return
+	// }
 
-	x := context.Background()
+	x, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	go backend.CacheWorker(x)
 
-	go h2s.Server(x, cfg.Http)
+	chFatal := make(chan int, 2)
 
-	params := make(conf.Values)
-	params.Set("framer_psk", cfg.Psk)
-	params.Set("server_url", cfg.ServerUrl)
+	go func() {
+		h2s.Server(x, cfg.Http)
+		chFatal <- 1
+	}()
 
-	options := &socks5.Options{
-		Port: cfg.PortLocal,
-		BackendProvider: func() backend.Backend {
-			return backend.GetBackend("h1pool", params)
-		},
-	}
-	if err := socks5.Server(x, options); err != nil {
-		log.Errorf("%v", err)
+	if cfg.PortLocal > 0 {
+		go func() {
+			params := make(conf.Values)
+			params.Set("framer_psk", cfg.Psk)
+			params.Set("server_url", cfg.ServerUrl)
+
+			options := &socks5.Options{
+				Port: cfg.PortLocal,
+				BackendProvider: func() backend.Backend {
+					return backend.GetBackend("h1pool", params)
+				},
+			}
+			if err := socks5.Server(x, options); err != nil {
+				log.Errorf("%v", err)
+			}
+			chFatal <- 1
+		}()
 	}
 
 	select {
+	case <-chFatal:
+		return
 	case <-x.Done():
 	}
 
